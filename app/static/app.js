@@ -567,7 +567,7 @@ async function pageMetrics(app) {
         return h("div", { class: "bar-row" }, h("span", {}, l), h("span", { class: "track" }, h("i", { style: `width:${100 * v / tot}%` })), h("span", {}, v));
       }))),
     h("div", { class: "panel section" }, h("h2", {}, "驳回原因"), reasons.length ? h("div", { class: "bars" },
-      ...reasons.map(([k, v]) => h("div", { class: "bar-row" }, h("span", {}, m.reject_reason_labels[k] || k),
+      ...reasons.map(([k, v]) => h("div", { class: "bar-row" }, h("span", {}, META.reject_reasons[k] || k),
         h("span", { class: "track" }, h("i", { style: `width:${100 * v / maxR}%;background:var(--faint)` })), h("span", {}, v))))
       : h("div", { class: "note", style: "padding-top:12px" }, "暂无驳回")),
     h("div", { class: "panel section" }, h("h2", {}, "对照组：人与 AI 各自发现"), h("div", { class: "bars" },
