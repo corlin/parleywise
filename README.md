@@ -48,3 +48,6 @@ uv run python -m app.auth add <用户名> <姓名> --admin   # 第一次先建�
 ./run.sh                                               # 打开 http://127.0.0.1:8000
 ```
 数据存在 `app/data/hiagent.db`（已 gitignore）。上传支持 .txt/.md/.docx/.pdf（不含扫描件 OCR）。试点部署见 `app/DEPLOY.md`。
+
+## 许可证
+Apache License 2.0，见 `LICENSE` 和 `NOTICE`。Copyright 2026 corlin。
