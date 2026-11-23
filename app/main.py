@@ -1,4 +1,4 @@
-"""hiagent 复核工作台后端：FastAPI + SQLite，审查流水线直接复用 review.py。
+"""Parleywise 后端：FastAPI + SQLite，审查流水线直接复用 review.py。
 
 启动（必须单进程：审查任务跑在进程内的线程池里）：
   uv run uvicorn app.main:app --port 8000
@@ -217,7 +217,7 @@ def _s(v):
 
 
 # ---------- 应用与鉴权 ----------
-app = FastAPI(title="hiagent 复核工作台", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Parleywise", docs_url=None, redoc_url=None, openapi_url=None)
 PUBLIC_API = {"/api/login", "/api/health"}
 
 

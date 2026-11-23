@@ -100,7 +100,7 @@ mark{{background:#ffe8a3;padding:0 1px}} sup{{color:#b45309;font-weight:600}}
 {'<p>未认定问题。</p>' if not final else '<table><tr><th>#</th><th>规则</th><th>原文片段</th><th>理由与修改意见</th><th>来源</th></tr>' + ''.join(rows) + '</table>'}
 <h2>原文（标注认定问题）</h2><div class="orig">{_marked_text(doc['text'], final)}</div>
 {f'<h2>附录：已驳回的 AI 意见（{len(rejected)} 条）</h2><ul>{rej}</ul>' if rejected else ''}
-<p class="foot">AI 意见仅为初审参考，最终结论以合规审核人判断为准。规则说明为条款转述，以监管原文为准。生成时间 {_t(time.time())}。</p>
+<p class="foot">由 Parleywise 生成。AI 意见仅为初审参考，最终结论以合规审核人判断为准。规则说明为条款转述，以监管原文为准。生成时间 {_t(time.time())}。</p>
 </body></html>"""
 
 
@@ -129,5 +129,5 @@ def to_md(doc, reasons, conclusions):
         L += ["", f"## 附录：已驳回的 AI 意见（{len(rejected)} 条）", ""]
         L += [f"- {f['rule_id']} {f['rule']['title']}「{f['quote']}」— {reasons.get(f['reject_reason'], '')}"
               + (f"：{f['note']}" if f.get("note") else "") for f in rejected]
-    L += ["", "## 原文", "", doc["text"], "", "> AI 意见仅为初审参考，最终结论以合规审核人判断为准。"]
+    L += ["", "## 原文", "", doc["text"], "", "> 由 Parleywise 生成。AI 意见仅为初审参考，最终结论以合规审核人判断为准。"]
     return "\n".join(L) + "\n"

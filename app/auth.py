@@ -10,7 +10,7 @@ import getpass, hashlib, hmac, secrets, sys, time
 
 from . import db
 
-SESSION_COOKIE = "hiagent_session"
+SESSION_COOKIE = "parleywise_session"
 SESSION_TTL = 12 * 3600          # 12 小时，覆盖一个工作日
 MAX_FAILS, LOCK_SECONDS = 5, 300  # 同一用户名连续 5 次失败锁 5 分钟
 _fails = {}                       # username -> (次数, 首次失败时间)；单进程内存即可

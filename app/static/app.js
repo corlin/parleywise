@@ -1,4 +1,4 @@
-/* 合规初审工作台前端：原生 JS，无构建步骤。所有用户/模型文本一律用 textContent 写入，避免 XSS。 */
+/* Parleywise 前端：原生 JS，无构建步骤。所有用户/模型文本一律用 textContent 写入，避免 XSS。 */
 "use strict";
 
 // ---------- 工具 ----------
@@ -597,7 +597,7 @@ function showLogin() {
   const pw = h("input", { class: "input", type: "password", autocomplete: "current-password", placeholder: "口令" });
   const err = h("div", { class: "small", style: "color:var(--high);min-height:20px" });
   const btn = h("button", { class: "btn primary", type: "submit", style: "width:100%;justify-content:center" }, "登录");
-  const form = h("form", { class: "panel login" }, h("div", { class: "brand", style: "margin-bottom:16px" }, h("span", { class: "logo" }, "审"), "合规初审工作台"),
+  const form = h("form", { class: "panel login" }, h("div", { class: "brand", style: "margin-bottom:16px" }, h("span", { class: "logo" }, "P"), "Parleywise", h("span", { class: "brand-sub" }, "合规初审")),
     h("label", { class: "field" }, h("span", {}, "用户名"), user), h("label", { class: "field" }, h("span", {}, "口令"), pw), err, btn);
   form.addEventListener("submit", async e => {
     e.preventDefault(); btn.disabled = true; err.textContent = "";

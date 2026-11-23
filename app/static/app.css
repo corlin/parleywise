@@ -28,6 +28,7 @@ kbd { font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px s
 .topnav nav a { color: var(--muted); padding: 6px 10px; border-radius: 6px; }
 .topnav nav a.active, .topnav nav a:hover { color: var(--text); background: var(--bg); }
 .spacer { flex: 1; }
+.brand-sub { color: var(--muted); font-weight: 400; font-size: 13px; padding-left: 8px; margin-left: 2px; border-left: 1px solid var(--line); }
 .whoami { color: var(--muted); font-size: 13px; white-space: nowrap; }
 .login { width: min(360px, 100%); margin: 12vh auto 0; padding: 28px; }
 .topnav[hidden] { display: none; }
@@ -200,7 +201,7 @@ table.list td.title { font-weight: 500; max-width: 360px; overflow: hidden; text
 .brand, .topnav nav a { white-space: nowrap; }
 @media (max-width: 640px) {
   .topnav { gap: 12px; padding: 0 12px; }
-  .brand-text { display: none; }
+  .brand-sub { display: none; }
   main { padding: 16px 12px; }
   .rv-bar { margin: -16px -12px 12px; padding: 10px 12px; }
 }
