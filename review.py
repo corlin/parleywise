@@ -14,7 +14,7 @@
   LITELLM_API_KEY    网关 key（只放环境变量，不要写进代码或提交到仓库）
   HIAGENT_MODEL_CHEAP / HIAGENT_MODEL_STRONG  网关里的模型别名，默认 cheap / strong
 """
-import argparse, datetime, json, os, re, sys, time, urllib.request, urllib.error
+import argparse, datetime, http.client, json, os, re, sys, time, urllib.request, urllib.error
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -79,7 +79,7 @@ class LLM:
                     payload = json.loads(resp.read())
                     cost = resp.headers.get("x-litellm-response-cost")
                 break
-            except (urllib.error.URLError, TimeoutError) as e:
+            except (urllib.error.URLError, TimeoutError, http.client.HTTPException, ConnectionError) as e:
                 if attempt == 2:
                     raise RuntimeError(f"网关调用失败：{e}") from e
                 time.sleep(2 * (attempt + 1))
