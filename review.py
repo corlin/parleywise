@@ -184,27 +184,104 @@ def review_doc(text, doc_type, all_rules, llm=None, cheap="cheap", strong="stron
 
 
 # ---------- 报告与评测 ----------
+SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
+
+
+def _span(q, text):
+    """片段在原文中首次出现的位置（忽略空白差异）；找不到返回 None。"""
+    core = re.sub(r"\s+", "", q or "")
+    if not core:
+        return None
+    m = re.search(r"\s*".join(map(re.escape, core)), text)
+    return (m.start(), m.end()) if m else None
+
+
+def group_snippets(kept, text, rules):
+    """把同一段原文（片段相同、互相包含或位置重叠）的多条规则意见合并为一处片段。
+    每组内主规则在前：严重度高者优先，其次模型意见优先，再按置信度。"""
+    n = len(kept)
+    quotes = [[f["quote"]] + list(f.get("also_quotes", [])) for f in kept]
+    spans = [[s for s in (_span(q, text) for q in qs) if s] for qs in quotes]
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def linked(i, j):
+        if any(a[0] < b[1] and b[0] < a[1] for a in spans[i] for b in spans[j]):
+            return True
+        return any(qa and qb and (qa in qb or qb in qa) for qa in quotes[i] for qb in quotes[j])
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if linked(i, j):
+                parent[find(i)] = find(j)
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+
+    def prio(i):
+        f = kept[i]
+        return (SEVERITY_RANK.get(rules[f["rule_id"]].get("severity"), 3),
+                f.get("stage") != "llm", -float(f.get("confidence") or 0))
+
+    out = []
+    for idx in groups.values():
+        idx.sort(key=prio)
+        start = min((s[0] for i in idx for s in spans[i]), default=len(text))
+        out.append((start, [kept[i] for i in idx]))
+    return [g for _, g in sorted(out, key=lambda x: x[0])]
+
+
+def snippet_quotes(group):
+    """一处片段展示的原文：去掉被其他片段包含的短片段。"""
+    qs = []
+    for f in group:
+        for q in [f["quote"]] + list(f.get("also_quotes", [])):
+            if q and q not in qs:
+                qs.append(q)
+    return [q for q in qs if not any(q != o and q in o for o in qs)]
+
+
 def to_markdown(doc_id, text, kept, dropped, rules):
+    groups = group_snippets(kept, text, rules)
     lines = [f"# 合规初审报告：{doc_id}", "", "> 本报告为 AI 初审意见，须由合规人员终审。", "",
-             "## 原文", "", text, "", f"## 疑似问题（{len(kept)} 条）", ""]
-    if not kept:
+             "## 原文", "", text, "",
+             f"## 疑似问题（{len(groups)} 处片段，涉及 {len(kept)} 条规则意见）", ""]
+    if not groups:
         lines.append("未发现疑似问题。")
-    for i, f in enumerate(kept, 1):
-        r = rules[f["rule_id"]]
-        lines += [f"{i}. **{r['id']} {r['title']}**（{r['article']}，{f.get('stage')}）",
-                  f"    - 原文片段：「{f['quote']}」" + ("".join(f"、「{q}」" for q in f.get("also_quotes", []))),
-                  f"    - 理由：{f.get('reason', '')}",
-                  f"    - 建议：{f.get('suggestion') or '按规则修改或删除'}"]
+    for i, g in enumerate(groups, 1):
+        head = rules[g[0]["rule_id"]]
+        title = f"{head['id']} {head['title']}"
+        if len(g) > 1:
+            title += "｜另涉：" + "、".join(f"{rules[f['rule_id']]['id']} {rules[f['rule_id']]['title']}" for f in g[1:])
+        lines += [f"{i}. **{title}**",
+                  "    - 原文片段：" + "、".join(f"「{q}」" for q in snippet_quotes(g))]
+        for f in g:
+            r = rules[f["rule_id"]]
+            lines += [f"    - {r['id']}（{r['article']}，{f.get('stage')}）理由：{f.get('reason', '')}",
+                      f"      建议：{f.get('suggestion') or '按规则修改或删除'}"]
     if dropped:
         lines += ["", f"## 被校验器拦下的意见（{len(dropped)} 条，不输出给审核人）", ""]
         lines += [f"- {d.get('rule_id')}：{d['drop_reason']}（片段：{d.get('quote')}）" for d in dropped]
     return "\n".join(lines) + "\n"
 
 
-def evaluate(results):
-    """strict：只认 expected；lenient：命中 acceptable（可接受的次要命中）不算误报。"""
+def to_record(doc_id, text, doc_type, kept, dropped, rules):
+    """每篇的结构化结果，便于以后不调模型直接重算指标。"""
+    return {"id": doc_id, "doc_type": doc_type, "kept": kept, "dropped": dropped,
+            "snippets": [[f["rule_id"] for f in g] for g in group_snippets(kept, text, rules)]}
+
+
+def evaluate(results, rules):
+    """strict：只认 expected；lenient：命中 acceptable（可接受的次要命中）不算误报。
+    片段级：按合并后的片段计，片段内任一规则在 expected 或 acceptable 中即算对。"""
     tp = fp = fp_strict = fn = 0
-    per_rule_miss, per_rule_fp = {}, {}
+    snip_total = snip_ok = rule_hits = 0
+    per_rule_miss, per_rule_fp, snip_fp = {}, {}, {}
     for case, kept in results:
         exp = {e["rule_id"] for e in case["expected"]}
         ok = set(case.get("acceptable", []))
@@ -215,11 +292,24 @@ def evaluate(results):
             per_rule_miss.setdefault(r, []).append(case["id"])
         for r in got - exp - ok:
             per_rule_fp.setdefault(r, []).append(case["id"])
+        rule_hits += len(kept)
+        for g in group_snippets(kept, case["text"], rules):
+            ids = [f["rule_id"] for f in g]
+            snip_total += 1
+            if set(ids) & (exp | ok):
+                snip_ok += 1
+            else:
+                snip_fp.setdefault(case["id"], []).append(ids)
     r3 = lambda a, b: round(a / b, 3) if b else 1.0
+    n = len(results) or 1
     return {"tp": tp, "fn": fn, "recall": r3(tp, tp + fn),
             "fp_strict": fp_strict, "precision_strict": r3(tp, tp + fp_strict),
             "fp_lenient": fp, "precision_lenient": r3(tp, tp + fp),
-            "missed": per_rule_miss, "false_positives_lenient": per_rule_fp}
+            "missed": per_rule_miss, "false_positives_lenient": per_rule_fp,
+            "snippet_precision": r3(snip_ok, snip_total),
+            "snippet_count_per_doc": round(snip_total / n, 2),
+            "rule_hits_per_doc": round(rule_hits / n, 2),
+            "snippet_false_positives": snip_fp}
 
 
 def main():
@@ -246,6 +336,8 @@ def main():
         kept, dropped = review_doc(text, a.doc_type, rules, llm, cheap, strong)
         md = to_markdown(Path(a.text_file).stem, text, kept, dropped, rules)
         (out / (Path(a.text_file).stem + ".md")).write_text(md, encoding="utf-8")
+        rec = to_record(Path(a.text_file).stem, text, a.doc_type, kept, dropped, rules)
+        (out / (Path(a.text_file).stem + ".json")).write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
         print(md)
     elif a.golden:
         cases = [json.loads(l) for l in Path(a.golden).read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -254,8 +346,10 @@ def main():
             kept, dropped = review_doc(c["text"], c.get("doc_type", "public"), rules, llm, cheap, strong)
             results.append((c, kept))
             (out / f"{c['id']}.md").write_text(to_markdown(c["id"], c["text"], kept, dropped, rules), encoding="utf-8")
+            rec = to_record(c["id"], c["text"], c.get("doc_type", "public"), kept, dropped, rules)
+            (out / f"{c['id']}.json").write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
         if a.eval:
-            m = evaluate(results)
+            m = evaluate(results, rules)
             m["mode"] = "offline-keyword" if a.offline else f"llm({cheap}->{strong})"
             m["cases"] = len(cases)
             m["seconds"] = round(time.time() - t0, 1)
