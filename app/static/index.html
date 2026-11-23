@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>合规初审工作台</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topnav">
+  <a class="brand" href="#/"><span class="logo">审</span><span class="brand-text">合规初审工作台</span></a>
+  <nav>
+    <a href="#/" data-nav="list">材料</a>
+    <a href="#/metrics" data-nav="metrics">度量</a>
+  </nav>
+  <div class="spacer"></div>
+  <label class="reviewer"><span class="lbl">审核人</span> <input id="reviewer" placeholder="填写姓名" maxlength="20"></label>
+</header>
+<main id="app"></main>
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
