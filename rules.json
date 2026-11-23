@@ -1,0 +1,464 @@
+{
+  "version": "0.2",
+  "as_of": "2026-11-23",
+  "sources": {
+    "ZXGD": "《公开募集证券投资基金宣传推介材料管理暂行规定》，2020-10-01 施行。本版依据第三方镜像 PDF 转述，待与证监会官网原文逐条核对。",
+    "XSBF": "《公开募集证券投资基金销售机构监督管理办法》（gov.cn 2020-08-31 发布，2020-10-01 施行）。",
+    "GGF": "《中华人民共和国广告法》第九条（绝对化用语）。"
+  },
+  "note": "description 为条款转述，不是原文；上线前须由合规人员按原文复核。check: keyword=关键词初筛即可提示, llm=需模型判断, manual=需文本以外的信息。",
+  "rules": [
+    {
+      "id": "R01",
+      "source": "ZXGD",
+      "article": "第四条第一款",
+      "title": "成立不足 6 个月展示业绩",
+      "description": "基金合同生效不足 6 个月的，不得展示该基金的过往业绩。",
+      "check": "llm",
+      "keywords": [
+        "成立以来",
+        "成立至今",
+        "运作以来"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R02",
+      "source": "ZXGD",
+      "article": "第四条第二款",
+      "title": "业绩未同时展示比较基准",
+      "description": "展示基金业绩时，须同时展示业绩比较基准的表现。",
+      "check": "llm",
+      "keywords": [
+        "收益率",
+        "涨幅",
+        "回报",
+        "净值增长"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R03",
+      "source": "ZXGD",
+      "article": "第四条第二款",
+      "title": "业绩展示期间短于 6 个月",
+      "description": "展示的业绩期间不得短于 6 个月（如只展示近 1 个月、近 3 个月）。",
+      "check": "llm",
+      "keywords": [
+        "近一月",
+        "近1月",
+        "近三月",
+        "近3月",
+        "近一周",
+        "今年以来"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R04",
+      "source": "ZXGD",
+      "article": "第四条（一）至（三）项",
+      "title": "业绩期间口径不符",
+      "description": "合同生效 6 个月至 1 年按生效日起算；1 至 5 年须含生效当年起所有完整会计年度；5 年以上须含最近 5 个完整会计年度。只挑部分年度展示即违规。",
+      "check": "llm",
+      "keywords": [
+        "年度",
+        "年收益"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R05",
+      "source": "ZXGD",
+      "article": "第四条（四）项",
+      "title": "投资目标或基金经理变更未特别说明",
+      "description": "展示期间内投资目标、范围、策略或基金经理发生变更的，须特别说明。",
+      "check": "llm",
+      "keywords": [
+        "基金经理",
+        "转型",
+        "变更"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R06",
+      "source": "ZXGD",
+      "article": "第五条（二）项",
+      "title": "引用数据未注明来源",
+      "description": "引用的统计数据须准确并注明出处。",
+      "check": "llm",
+      "keywords": [
+        "%",
+        "排名",
+        "数据显示"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R07",
+      "source": "ZXGD",
+      "article": "第五条（二）项",
+      "title": "引用模拟、未发生或未经核实的数据",
+      "description": "不得引用未经核实、尚未发生或者模拟的数据（定投模拟除外且须满足 R08）。按【今天日期】判断数据是否已发生。",
+      "check": "llm",
+      "keywords": [
+        "模拟",
+        "测算",
+        "假设",
+        "回测",
+        "预计"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R08",
+      "source": "ZXGD",
+      "article": "第五条（二）项",
+      "title": "定投模拟不合规",
+      "description": "定期定额等模拟历史收益须使用有代表性的指数、较长期间，标明年复合收益率，说明数据来源、计算方法与公式，并附风险提示。",
+      "check": "llm",
+      "keywords": [
+        "定投",
+        "定期定额"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R09",
+      "source": "ZXGD",
+      "article": "第六条第一款",
+      "title": "缺少“过往业绩不预示未来”声明",
+      "description": "展示业绩须显著声明基金过往业绩不预示未来表现，管理人管理的其他基金业绩不构成本基金业绩保证。",
+      "check": "llm",
+      "keywords": [],
+      "severity": "high"
+    },
+    {
+      "id": "R10",
+      "source": "ZXGD",
+      "article": "第六条第一款",
+      "title": "明示或暗示承诺未来收益",
+      "description": "不得明示或暗示基金未来收益。",
+      "check": "llm",
+      "keywords": [
+        "一定能",
+        "必将",
+        "稳稳",
+        "跑赢",
+        "翻倍"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R11",
+      "source": "ZXGD",
+      "article": "第六条第二款",
+      "title": "基金经理业绩挑选产品或期间",
+      "description": "展示基金经理过往业绩须如实说明其任职角色，原则上展示其管理的全部同类产品，不得挑选产品或期间。",
+      "check": "llm",
+      "keywords": [
+        "基金经理",
+        "代表作",
+        "任职以来",
+        "管理期间"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R12",
+      "source": "ZXGD",
+      "article": "第七条",
+      "title": "比较口径不一致",
+      "description": "与其他基金比较须使用可比的数据来源、统计方法和期间，做到公平、准确、相关。",
+      "check": "llm",
+      "keywords": [
+        "同类",
+        "超越",
+        "领先",
+        "对比",
+        "相比"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R13",
+      "source": "ZXGD",
+      "article": "第九条",
+      "title": "评级引用不合规",
+      "description": "引用基金评级须注明评级机构和发布日期，不得引用超过 2 年的评级。",
+      "check": "llm",
+      "keywords": [
+        "评级",
+        "星级",
+        "五星",
+        "获奖",
+        "金牛"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R14",
+      "source": "ZXGD",
+      "article": "第十条",
+      "title": "宣传股东背景未说明业务隔离",
+      "description": "介绍股东背景的，须说明管理人与股东之间实行业务隔离。",
+      "check": "llm",
+      "keywords": [
+        "股东",
+        "背景",
+        "母公司",
+        "旗下",
+        "系"
+      ],
+      "severity": "low"
+    },
+    {
+      "id": "R15",
+      "source": "ZXGD",
+      "article": "第十二条第一款",
+      "title": "缺少显著风险提示",
+      "description": "须有显著、清晰的风险提示（篇幅允许时附风险揭示书）。",
+      "check": "llm",
+      "keywords": [],
+      "severity": "high"
+    },
+    {
+      "id": "R16",
+      "source": "ZXGD",
+      "article": "第十三条",
+      "title": "以限额或比例配售为卖点",
+      "description": "募集上限与比例配售只能作为风险事项列示，不得以字体字号强调或作为营销卖点。",
+      "check": "keyword",
+      "keywords": [
+        "限量",
+        "比例配售",
+        "额度有限",
+        "限额发售",
+        "售完即止"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R17",
+      "source": "ZXGD",
+      "article": "第十四条",
+      "title": "提及注册未作免责声明",
+      "description": "提及经证监会注册的，须声明注册不表明对风险收益作出实质性判断、推荐或保证。",
+      "check": "llm",
+      "keywords": [
+        "证监会注册",
+        "获批",
+        "核准",
+        "批文"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R18",
+      "source": "ZXGD",
+      "article": "第十五条（一）项",
+      "title": "无依据的业绩优越性用语",
+      "description": "无客观依据不得使用“业绩稳健”“业绩优良”“名列前茅”“位居前列”“唯一”及与之同义的优越性表述。",
+      "check": "keyword",
+      "keywords": [
+        "业绩稳健",
+        "业绩优良",
+        "名列前茅",
+        "位居前列",
+        "唯一"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R19",
+      "source": "ZXGD",
+      "article": "第十五条（二）项",
+      "title": "使投资者忽视风险的用语",
+      "description": "不得使用“安全”“保证”“承诺”“保险”“有保障”“高收益”“无风险”“坐享财富增长”“安心享受成长”“尽享牛市”等可能使投资者认为没有风险或忽视风险的表述。",
+      "check": "keyword",
+      "keywords": [
+        "安全",
+        "保证",
+        "承诺",
+        "保险",
+        "有保障",
+        "高收益",
+        "无风险",
+        "坐享财富增长",
+        "安心享受成长",
+        "尽享牛市"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R20",
+      "source": "ZXGD",
+      "article": "第十五条（三）项",
+      "title": "渲染营销时间紧迫",
+      "description": "不得使用“欲购从速”“申购良机”等片面强调集中营销时间限制的表述。",
+      "check": "keyword",
+      "keywords": [
+        "欲购从速",
+        "申购良机",
+        "机不可失",
+        "错过再等",
+        "抢购",
+        "最后一天"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R21",
+      "source": "ZXGD",
+      "article": "第十五条（四）项",
+      "title": "诋毁同业",
+      "description": "不得登载贬低其他管理人、托管人、销售机构或其基金的内容。",
+      "check": "llm",
+      "keywords": [
+        "不如",
+        "远超",
+        "完胜",
+        "别家"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R22",
+      "source": "ZXGD",
+      "article": "第十五条（五）项",
+      "title": "夸大或片面宣传过往业绩",
+      "description": "不得夸大或片面宣传管理人、其人员或基金的过往业绩；须有明确的夸大措辞（如“冠军”“最牛”）或只挑有利数据的情形，仅客观陈述一个业绩数字不算本条。",
+      "check": "llm",
+      "keywords": [
+        "冠军",
+        "最牛",
+        "神",
+        "收益王"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R23",
+      "source": "ZXGD",
+      "article": "第十五条（六）项",
+      "title": "含单位或个人推荐",
+      "description": "不得登载单位或个人的推荐性文字。",
+      "check": "llm",
+      "keywords": [
+        "推荐",
+        "力荐",
+        "点赞",
+        "专家认为",
+        "大V"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R24",
+      "source": "GGF",
+      "article": "第九条第（三）项（经暂行规定第十五条（七）项援引）",
+      "title": "绝对化用语",
+      "description": "不得使用“国家级”“最高级”“最佳”等绝对化用语。",
+      "check": "keyword",
+      "keywords": [
+        "最佳",
+        "最高级",
+        "国家级",
+        "第一",
+        "顶级",
+        "最强"
+      ],
+      "severity": "medium"
+    },
+    {
+      "id": "R25",
+      "source": "XSBF",
+      "article": "第二十四条（二）项",
+      "title": "承诺收益或保本",
+      "description": "不得违规承诺收益、本金不受损失或者限定损失金额、比例。",
+      "check": "keyword",
+      "keywords": [
+        "保本",
+        "不亏",
+        "稳赚",
+        "本金无忧",
+        "零风险",
+        "亏损不超过"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R26",
+      "source": "XSBF",
+      "article": "第二十四条（三）项",
+      "title": "预测业绩或宣传预期收益率",
+      "description": "不得预测基金投资业绩，或者宣传预期收益率。",
+      "check": "keyword",
+      "keywords": [
+        "预期收益",
+        "预计年化",
+        "目标收益",
+        "预期年化",
+        "有望达到"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R27",
+      "source": "XSBF",
+      "article": "第二十四条（六）项",
+      "title": "抽奖、返利或赠送",
+      "description": "不得以抽奖、回扣或者赠送实物、保险、基金份额等方式销售基金。",
+      "check": "keyword",
+      "keywords": [
+        "抽奖",
+        "返现",
+        "返利",
+        "赠送",
+        "红包",
+        "送礼"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R28",
+      "source": "XSBF",
+      "article": "第二十四条（七）项",
+      "title": "注册完成前宣传",
+      "description": "基金募集申请完成注册前，不得向公众分发、公布宣传推介材料。",
+      "check": "manual",
+      "keywords": [
+        "即将发行",
+        "敬请期待",
+        "预约"
+      ],
+      "severity": "high"
+    },
+    {
+      "id": "R29",
+      "source": "XSBF",
+      "article": "第二十四条（五）项",
+      "title": "未明确销售主体或产品",
+      "description": "仅当全文（含文末声明）完全没有写明实际销售机构名称时才算违规；只要任何位置出现了销售机构或管理人全称，即视为已明确，不得报告。",
+      "check": "llm",
+      "keywords": [],
+      "severity": "medium"
+    },
+    {
+      "id": "R30",
+      "source": "XSBF",
+      "article": "第四十五条",
+      "title": "私募产品公开推介",
+      "description": "私募基金不得通过公众媒体、互联网、公开场所、短信、微信等公开或变相公开推介（仅适用于私募材料）。",
+      "check": "llm",
+      "keywords": [
+        "私募",
+        "合格投资者",
+        "百万起投"
+      ],
+      "severity": "high",
+      "applies_to": "private"
+    }
+  ]
+}

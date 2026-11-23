@@ -1,0 +1,9 @@
+[project]
+name = "hiagent-mvp0"
+version = "0.1.0"
+description = "基金营销材料合规初审 MVP0"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.uv]
+package = false
