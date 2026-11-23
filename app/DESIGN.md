@@ -37,7 +37,8 @@
   审查任务在后台线程执行，状态写库，前端轮询。
 - 前端：无构建步骤的原生 HTML/CSS/JS（`app/static/`），由 FastAPI 直接托管。没有 node_modules，没有打包。
 - 数据：`app/data/hiagent.db`（已 gitignore）。材料原文只存本机；送去模型的内容经 LiteLLM 网关。
-- 启动：`uv run uvicorn app.main:app --port 8000`，浏览器打开 http://127.0.0.1:8000 。
+- 登录：账号用命令行管理（`python -m app.auth`），scrypt 口令哈希，HttpOnly 会话 Cookie；审核人姓名取自登录身份，审计日志记录每个操作者。
+- 启动：`./run.sh`，浏览器打开 http://127.0.0.1:8000 。试点部署见 `app/DEPLOY.md`。
 
 ## 暂不做
-多用户登录与权限、扫描件 OCR、图片材料、规则库在线编辑、部署到服务器。试点前需要补登录。
+扫描件 OCR、图片材料、规则库在线编辑、账号网页管理与单点登录、多机构隔离（一套部署只服务一家机构）。

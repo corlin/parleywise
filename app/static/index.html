@@ -7,14 +7,15 @@
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header class="topnav">
+<header class="topnav" id="topnav" hidden>
   <a class="brand" href="#/"><span class="logo">审</span><span class="brand-text">合规初审工作台</span></a>
   <nav>
     <a href="#/" data-nav="list">材料</a>
     <a href="#/metrics" data-nav="metrics">度量</a>
   </nav>
   <div class="spacer"></div>
-  <label class="reviewer"><span class="lbl">审核人</span> <input id="reviewer" placeholder="填写姓名" maxlength="20"></label>
+  <span class="whoami" id="whoami"></span>
+  <button class="btn ghost sm" id="logout">退出</button>
 </header>
 <main id="app"></main>
 <div id="toast" class="toast" hidden></div>

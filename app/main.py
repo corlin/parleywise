@@ -1,11 +1,12 @@
-"""hiagent MVP1 复核工作台后端：FastAPI + SQLite，审查流水线直接复用 review.py。
+"""hiagent 复核工作台后端：FastAPI + SQLite，审查流水线直接复用 review.py。
 
-启动：uv run uvicorn app.main:app --port 8000
+启动（必须单进程：审查任务跑在进程内的线程池里）：
+  uv run uvicorn app.main:app --port 8000
 """
-import io, json, os, sqlite3, sys, threading, time, traceback
+import io, json, os, sys, time, traceback, unicodedata
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
@@ -15,78 +16,23 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import review  # noqa: E402
 
-from . import report  # noqa: E402
+from . import auth, report  # noqa: E402
+from .db import db, init, log_event  # noqa: E402
 
 APP_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("HIAGENT_DATA_DIR", APP_DIR / "data"))
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = DATA_DIR / "hiagent.db"
 MAX_CHARS = 30000
+MAX_UPLOAD = 10 * 1024 * 1024
 REJECT_REASONS = {"not_violation": "不构成违规", "not_applicable": "规则不适用",
                   "bad_quote": "片段定位不准", "duplicate": "与其他意见重复", "other": "其他"}
 CONCLUSIONS = {"pass": "通过", "revise": "修改后通过", "reject": "不通过"}
+SECURE_COOKIE = os.environ.get("HIAGENT_SECURE_COOKIE") == "1"  # 走 HTTPS 时设为 1
 
 review.load_dotenv()
 RULES = review.load_rules()
+SOURCES = json.loads((ROOT / "rules.json").read_text(encoding="utf-8")).get("sources", {})
 CHEAP = os.environ.get("HIAGENT_MODEL_CHEAP", "cheap")
 STRONG = os.environ.get("HIAGENT_MODEL_STRONG", "strong")
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS documents (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL, doc_type TEXT NOT NULL DEFAULT 'public', text TEXT NOT NULL,
-  source_filename TEXT, golden_case_id TEXT,
-  arm TEXT NOT NULL DEFAULT 'ai',            -- ai：显示 AI 意见；control：对照组，隐藏 AI 意见
-  mode TEXT NOT NULL DEFAULT 'full',         -- full：模型流水线；offline：仅关键词
-  status TEXT NOT NULL DEFAULT 'queued',     -- queued/running/done/failed
-  stage TEXT, error TEXT, pipeline_seconds REAL, usage_json TEXT, model_info TEXT,
-  created_at REAL NOT NULL, reviewer TEXT,
-  review_status TEXT NOT NULL DEFAULT 'pending',  -- pending/in_progress/completed
-  review_started_at REAL, review_completed_at REAL, active_ms INTEGER NOT NULL DEFAULT 0,
-  conclusion TEXT, summary_note TEXT
-);
-CREATE TABLE IF NOT EXISTS findings (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-  source TEXT NOT NULL,                       -- ai / manual
-  group_idx INTEGER NOT NULL, rank_in_group INTEGER NOT NULL DEFAULT 0,
-  rule_id TEXT NOT NULL, quote TEXT NOT NULL, also_quotes TEXT NOT NULL DEFAULT '[]',
-  spans TEXT NOT NULL DEFAULT '[]', reason TEXT, suggestion TEXT, confidence REAL, stage TEXT,
-  decision TEXT,                              -- accepted / modified / rejected / NULL
-  reject_reason TEXT, note TEXT, edited_suggestion TEXT,
-  decided_at REAL, elapsed_ms INTEGER, created_at REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS dropped (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, doc_id INTEGER NOT NULL, payload TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, doc_id INTEGER, finding_id INTEGER,
-  type TEXT NOT NULL, payload TEXT, reviewer TEXT, ts REAL NOT NULL
-);
-"""
-
-
-@contextmanager
-def db():
-    con = sqlite3.connect(DB_PATH, timeout=10)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys=ON")
-    try:
-        yield con
-        con.commit()
-    finally:
-        con.close()
-
-
-with db() as _c:
-    _c.executescript(SCHEMA)
-    _c.execute("PRAGMA journal_mode=WAL")
-
-
-def log_event(con, doc_id, typ, payload=None, finding_id=None, reviewer=None):
-    con.execute("INSERT INTO events(doc_id, finding_id, type, payload, reviewer, ts) VALUES (?,?,?,?,?,?)",
-                (doc_id, finding_id, typ, json.dumps(payload, ensure_ascii=False) if payload else None,
-                 reviewer, time.time()))
+init()
 
 
 # ---------- 审查任务 ----------
@@ -94,7 +40,7 @@ EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
 
 class StageLLM(review.LLM):
-    """第 1 次调用是初筛，第 2 次是复核；调用前把阶段写库，供前端显示。"""
+    """第 1 次调用是初筛，之后是复核；调用前把阶段写库，供前端显示。"""
     def __init__(self, doc_id):
         super().__init__()
         self.doc_id, self.n = doc_id, 0
@@ -113,46 +59,38 @@ def set_doc(doc_id, **kw):
 def run_pipeline(doc_id):
     with db() as con:
         d = con.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+    if not d:
+        return
     t0 = time.time()
-    set_doc(doc_id, status="running", stage="keyword", error=None)
+    set_doc(doc_id, status="running", error=None)
     try:
+        llm = StageLLM(doc_id) if d["mode"] == "full" else None
+        if llm and not llm.key:
+            raise RuntimeError("未设置 LITELLM_API_KEY（mvp0/.env）")
         text = d["text"]
-        rules = review.applicable(RULES, d["doc_type"])
-        hints = review.keyword_scan(text, rules)
-        found = [h for h in hints if rules[h["rule_id"]]["check"] == "keyword"]
-        rejected, llm = [], None
-        if d["mode"] == "full":
-            llm = StageLLM(doc_id)
-            if not llm.key:
-                raise RuntimeError("未设置 LITELLM_API_KEY（mvp0/.env）")
-            reviewed, rejected = review.llm_review(text, rules, hints, llm, CHEAP, STRONG)
-            found += reviewed
-        set_doc(doc_id, stage="verify")
-        kept, dropped = review.verify(found, text, rules)
-        groups = review.group_snippets(kept, text, rules)
-        now = time.time()
+        kept, dropped = review.review_doc(text, d["doc_type"], RULES, llm, CHEAP, STRONG,
+                                          on_stage=lambda s: set_doc(doc_id, stage=s))
+        secs = round(time.time() - t0, 1)
         with db() as con:
             con.execute("DELETE FROM findings WHERE doc_id=? AND source='ai'", (doc_id,))
             con.execute("DELETE FROM dropped WHERE doc_id=?", (doc_id,))
-            for gi, g in enumerate(groups):
+            for gi, g in enumerate(review.group_snippets(kept, text, RULES)):
                 for ri, f in enumerate(g):
                     qs = [f["quote"]] + list(f.get("also_quotes", []))
-                    spans = [s for s in (review._span(q, text) for q in qs) if s]
                     con.execute(
                         "INSERT INTO findings(doc_id, source, group_idx, rank_in_group, rule_id, quote, also_quotes,"
                         " spans, reason, suggestion, confidence, stage, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (doc_id, "ai", gi, ri, f["rule_id"], f["quote"],
-                         json.dumps(f.get("also_quotes", []), ensure_ascii=False), json.dumps(spans),
-                         f.get("reason", ""), f.get("suggestion", ""), _num(f.get("confidence")),
-                         f.get("stage"), now))
-            for x in dropped + rejected:
-                con.execute("INSERT INTO dropped(doc_id, payload) VALUES (?,?)",
-                            (doc_id, json.dumps(x, ensure_ascii=False)))
+                        (doc_id, "ai", gi, ri, f["rule_id"], f["quote"], json.dumps(qs[1:], ensure_ascii=False),
+                         json.dumps([s for s in (review._span(q, text) for q in qs) if s]),
+                         str(f.get("reason") or ""), str(f.get("suggestion") or ""), _num(f.get("confidence")),
+                         f.get("stage"), time.time()))
+            con.executemany("INSERT INTO dropped(doc_id, payload) VALUES (?,?)",
+                            [(doc_id, json.dumps(x, ensure_ascii=False)) for x in dropped])
             con.execute("UPDATE documents SET status='done', stage=NULL, pipeline_seconds=?, usage_json=?,"
                         " model_info=? WHERE id=?",
-                        (round(time.time() - t0, 1), json.dumps(llm.usage) if llm else None,
-                         f"{CHEAP} → {STRONG}" if llm else "仅关键词", doc_id))
-            log_event(con, doc_id, "pipeline_done", {"findings": len(kept), "seconds": round(time.time() - t0, 1)})
+                        (secs, json.dumps(llm.usage) if llm else None, f"{CHEAP} → {STRONG}" if llm else "仅关键词",
+                         doc_id))
+            log_event(con, doc_id, "pipeline_done", {"findings": len(kept), "seconds": secs})
     except Exception as e:  # 失败写库，前端可重试
         traceback.print_exc()
         set_doc(doc_id, status="failed", stage=None, error=str(e)[:500], pipeline_seconds=round(time.time() - t0, 1))
@@ -183,51 +121,52 @@ _RADICALS = dict(zip("⻛⻔⻢⻓⻋⻅⻆⻝⻘⻜⻄⻩⻰⻮⻉⻈⻨⻥⻚�
 
 
 def fix_pdf_radicals(t):
-    import unicodedata
     return "".join(unicodedata.normalize("NFKC", c) if 0x2F00 <= ord(c) <= 0x2FDF else _RADICALS.get(c, c) for c in t)
 
 
 def extract_text(filename, data):
     name = (filename or "").lower()
-    if name.endswith((".txt", ".md")):
-        for enc in ("utf-8-sig", "gb18030"):
-            try:
-                return data.decode(enc)
-            except UnicodeDecodeError:
-                continue
-        raise HTTPException(400, "无法识别文本编码，请另存为 UTF-8")
-    if name.endswith(".docx"):
-        import docx
-        d = docx.Document(io.BytesIO(data))
-        parts = [p.text for p in d.paragraphs]
-        for t in d.tables:
-            for row in t.rows:
-                parts.append(" | ".join(c.text for c in row.cells))
-        return "\n".join(parts)
-    if name.endswith(".pdf"):
-        from pypdf import PdfReader
-        txt = fix_pdf_radicals("\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(data)).pages))
-        if not txt.strip():
-            raise HTTPException(400, "PDF 里没有可提取的文字，可能是扫描件；暂不支持 OCR")
-        return txt
-    raise HTTPException(400, "仅支持 .txt / .md / .docx / .pdf")
+    try:
+        if name.endswith((".txt", ".md")):
+            for enc in ("utf-8-sig", "gb18030"):
+                try:
+                    return data.decode(enc)
+                except UnicodeDecodeError:
+                    continue
+            raise HTTPException(400, "无法识别文本编码，请另存为 UTF-8")
+        if name.endswith(".docx"):
+            import docx
+            d = docx.Document(io.BytesIO(data))
+            parts = [p.text for p in d.paragraphs]
+            parts += [" | ".join(c.text for c in row.cells) for t in d.tables for row in t.rows]
+            return "\n".join(parts)
+        if name.endswith(".pdf"):
+            from pypdf import PdfReader
+            txt = fix_pdf_radicals("\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(data)).pages))
+            if not txt.strip():
+                raise HTTPException(400, "PDF 里没有可提取的文字，可能是扫描件；暂不支持 OCR")
+            return txt
+    except HTTPException:
+        raise
+    except Exception as e:  # 损坏或加密的文件
+        raise HTTPException(400, f"文件无法解析：{type(e).__name__}") from e
+    raise HTTPException(400, "仅支持 .txt / .md / .docx / .pdf（旧版 .doc 请另存为 .docx）")
 
 
 def clean_text(t):
-    lines = [l.rstrip() for l in t.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
-    out = "\n".join(lines).strip()
+    out = "\n".join(l.rstrip() for l in t.replace("\r\n", "\n").replace("\r", "\n").split("\n")).strip()
     while "\n\n\n" in out:
         out = out.replace("\n\n\n", "\n\n")
     return out
 
 
 # ---------- 序列化 ----------
-def finding_dict(r, rules=RULES):
+def finding_dict(r):
     f = dict(r)
     f["also_quotes"] = json.loads(f["also_quotes"] or "[]")
     f["spans"] = json.loads(f["spans"] or "[]")
-    rule = rules.get(f["rule_id"], {})
-    f["rule"] = {k: rule.get(k) for k in ("id", "title", "article", "source", "description", "severity", "check")}
+    rule = RULES.get(f["rule_id"], {})
+    f["rule"] = {k: rule.get(k) for k in ("id", "title", "article", "source", "description", "severity")}
     return f
 
 
@@ -237,10 +176,11 @@ def doc_summary(con, d):
         SUM(source='manual') manual, COUNT(DISTINCT CASE WHEN source='ai' THEN group_idx END) groups
         FROM findings WHERE doc_id=?""", (d["id"],)).fetchone()
     s = {k: d[k] for k in ("id", "title", "doc_type", "arm", "mode", "status", "stage", "error", "created_at",
-                           "review_status", "active_ms", "conclusion", "reviewer", "golden_case_id",
-                           "pipeline_seconds", "source_filename")}
+                           "created_by", "review_status", "active_ms", "conclusion", "reviewer")}
     s.update(ai_findings=c["ai"] or 0, ai_decided=c["ai_decided"] or 0, manual_findings=c["manual"] or 0,
              snippets=c["groups"] or 0)
+    if d["arm"] == "control" and d["review_status"] != "completed":  # 连 AI 意见条数也不透露
+        s.update(ai_findings=0, ai_decided=0, snippets=0)
     return s
 
 
@@ -251,101 +191,11 @@ def load_doc(con, doc_id):
     return d
 
 
-# ---------- API ----------
-app = FastAPI(title="hiagent 复核工作台")
-
-
-@app.middleware("http")
-async def no_cache_static(request, call_next):
-    resp = await call_next(request)
-    if request.url.path == "/" or request.url.path.startswith("/static/"):
-        resp.headers["Cache-Control"] = "no-cache"  # 单机工具，改了前端刷新即生效
-    return resp
-
-
-@app.get("/api/meta")
-def meta():
-    return {"reject_reasons": REJECT_REASONS, "conclusions": CONCLUSIONS,
-            "models": f"{CHEAP} → {STRONG}", "key_configured": bool(os.environ.get("LITELLM_API_KEY")),
-            "sources": json.loads((ROOT / "rules.json").read_text(encoding="utf-8")).get("sources", {})}
-
-
-@app.get("/api/rules")
-def rules():
-    return list(RULES.values())
-
-
-@app.get("/api/documents")
-def list_documents():
-    with db() as con:
-        return [doc_summary(con, d) for d in con.execute("SELECT * FROM documents ORDER BY id DESC")]
-
-
-@app.post("/api/documents")
-async def create_document(title: str = Form(""), doc_type: str = Form("public"), text: str = Form(""),
-                          arm: str = Form("ai"), mode: str = Form("full"), reviewer: str = Form(""),
-                          golden_case_id: str = Form(""), file: UploadFile | None = File(None)):
-    fname = None
-    if file is not None and file.filename:
-        fname = file.filename
-        text = extract_text(fname, await file.read())
-    text = clean_text(text or "")
-    if not text:
-        raise HTTPException(400, "材料内容为空")
-    if len(text) > MAX_CHARS:
-        raise HTTPException(400, f"材料超过 {MAX_CHARS} 字，请拆分后提交")
-    if doc_type not in ("public", "private") or arm not in ("ai", "control") or mode not in ("full", "offline"):
-        raise HTTPException(400, "参数不合法")
-    title = title.strip() or (Path(fname).stem if fname else text[:24].replace("\n", " "))
-    with db() as con:
-        cur = con.execute("INSERT INTO documents(title, doc_type, text, source_filename, golden_case_id, arm, mode,"
-                          " created_at, reviewer) VALUES (?,?,?,?,?,?,?,?,?)",
-                          (title, doc_type, text, fname, golden_case_id or None, arm, mode, time.time(),
-                           reviewer or None))
-        doc_id = cur.lastrowid
-        log_event(con, doc_id, "created", {"arm": arm, "mode": mode, "file": fname}, reviewer=reviewer or None)
-    enqueue(doc_id)
-    return {"id": doc_id}
-
-
-@app.get("/api/documents/{doc_id}")
-def get_document(doc_id: int):
-    with db() as con:
-        d = load_doc(con, doc_id)
-        out = doc_summary(con, d)
-        out.update(text=d["text"], summary_note=d["summary_note"], usage=json.loads(d["usage_json"] or "null"),
-                   model_info=d["model_info"], review_started_at=d["review_started_at"],
-                   review_completed_at=d["review_completed_at"])
-        rows = con.execute("SELECT * FROM findings WHERE doc_id=? ORDER BY group_idx, rank_in_group, id", (doc_id,))
-        fs = [finding_dict(r) for r in rows]
-        # 对照组审查完成前，不把 AI 意见发给前端
-        hide_ai = d["arm"] == "control" and d["review_status"] != "completed"
-        out["ai_hidden"] = hide_ai
-        out["findings"] = [f for f in fs if not (hide_ai and f["source"] == "ai")]
-        out["dropped_count"] = con.execute("SELECT COUNT(*) FROM dropped WHERE doc_id=?", (doc_id,)).fetchone()[0]
-        if d["golden_case_id"] and d["review_status"] == "completed":  # 完成前不给前端，避免影响审核人
-            out["golden"] = golden_cases().get(d["golden_case_id"])
-    return out
-
-
-@app.delete("/api/documents/{doc_id}")
-def delete_document(doc_id: int):
-    with db() as con:
-        load_doc(con, doc_id)
-        con.execute("DELETE FROM documents WHERE id=?", (doc_id,))
-        con.execute("DELETE FROM dropped WHERE doc_id=?", (doc_id,))
-        log_event(con, doc_id, "deleted")
-    return {"ok": True}
-
-
-@app.post("/api/documents/{doc_id}/retry")
-def retry(doc_id: int):
-    with db() as con:
-        d = load_doc(con, doc_id)
-        if d["status"] in ("queued", "running"):
-            raise HTTPException(409, "任务正在进行")
-    enqueue(doc_id)
-    return {"ok": True}
+def load_finding(con, fid):
+    f = con.execute("SELECT * FROM findings WHERE id=?", (fid,)).fetchone()
+    if not f:
+        raise HTTPException(404, "意见不存在")
+    return f
 
 
 def _editable(d):
@@ -355,48 +205,195 @@ def _editable(d):
         raise HTTPException(409, "AI 初审尚未完成")
 
 
+def _int(v, default=0):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _s(v):
+    return str(v or "").strip()
+
+
+# ---------- 应用与鉴权 ----------
+app = FastAPI(title="hiagent 复核工作台", docs_url=None, redoc_url=None, openapi_url=None)
+PUBLIC_API = {"/api/login", "/api/health"}
+
+
+@app.middleware("http")
+async def guard(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path not in PUBLIC_API:
+        user = auth.user_for(request.cookies.get(auth.SESSION_COOKIE))
+        if not user:
+            return JSONResponse({"detail": "请先登录"}, status_code=401)
+        request.state.user = user
+    resp = await call_next(request)
+    if path == "/" or path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"  # 改了前端刷新即生效
+    return resp
+
+
+def me(request):
+    return request.state.user
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True}
+
+
+@app.post("/api/login")
+async def do_login(request: Request):
+    body = await request.json()
+    if not auth.has_users():
+        raise HTTPException(400, "还没有账号，请先在服务器上运行：uv run python -m app.auth add <用户名> <姓名> --admin")
+    token, res = auth.login(_s(body.get("username")), str(body.get("password") or ""))
+    if not token:
+        raise HTTPException(401, res)
+    resp = JSONResponse(res)
+    resp.set_cookie(auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL, httponly=True, samesite="lax",
+                    secure=SECURE_COOKIE)
+    return resp
+
+
+@app.post("/api/logout")
+def do_logout(request: Request):
+    auth.logout(request.cookies.get(auth.SESSION_COOKIE))
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.SESSION_COOKIE)
+    return resp
+
+
+@app.get("/api/meta")
+def meta(request: Request):
+    return {"user": me(request), "reject_reasons": REJECT_REASONS, "conclusions": CONCLUSIONS,
+            "key_configured": bool(os.environ.get("LITELLM_API_KEY")), "sources": SOURCES,
+            "rules": list(RULES.values())}
+
+
+@app.get("/api/documents")
+def list_documents():
+    with db() as con:
+        return [doc_summary(con, d) for d in con.execute("SELECT * FROM documents ORDER BY id DESC")]
+
+
+@app.post("/api/documents")
+async def create_document(request: Request, title: str = Form(""), doc_type: str = Form("public"),
+                          text: str = Form(""), arm: str = Form("ai"), mode: str = Form("full"),
+                          golden_case_id: str = Form(""), file: UploadFile | None = File(None)):
+    fname = None
+    if file is not None and file.filename:
+        fname = file.filename
+        data = await file.read(MAX_UPLOAD + 1)
+        if len(data) > MAX_UPLOAD:
+            raise HTTPException(400, "文件超过 10 MB")
+        text = extract_text(fname, data)
+    text = clean_text(text or "")
+    if not text:
+        raise HTTPException(400, "材料内容为空")
+    if len(text) > MAX_CHARS:
+        raise HTTPException(400, f"材料超过 {MAX_CHARS} 字，请拆分后提交")
+    if doc_type not in ("public", "private") or arm not in ("ai", "control") or mode not in ("full", "offline"):
+        raise HTTPException(400, "参数不合法")
+    if golden_case_id not in golden_cases():
+        golden_case_id = ""
+    title = title.strip()[:80] or (Path(fname).stem if fname else text[:24].replace("\n", " "))
+    who = me(request)["name"]
+    with db() as con:
+        cur = con.execute("INSERT INTO documents(title, doc_type, text, source_filename, golden_case_id, arm, mode,"
+                          " created_at, created_by) VALUES (?,?,?,?,?,?,?,?,?)",
+                          (title, doc_type, text, fname, golden_case_id or None, arm, mode, time.time(), who))
+        doc_id = cur.lastrowid
+        log_event(con, doc_id, "created", {"arm": arm, "mode": mode, "file": fname}, reviewer=who)
+    enqueue(doc_id)
+    return {"id": doc_id}
+
+
+def document_view(doc_id):
+    with db() as con:
+        d = load_doc(con, doc_id)
+        out = doc_summary(con, d)
+        out.update(text=d["text"], summary_note=d["summary_note"], model_info=d["model_info"],
+                   review_completed_at=d["review_completed_at"])
+        rows = con.execute("SELECT * FROM findings WHERE doc_id=? ORDER BY group_idx, rank_in_group, id", (doc_id,))
+        # 对照组审查完成前，不把 AI 意见发给前端
+        hide_ai = d["arm"] == "control" and d["review_status"] != "completed"
+        out["ai_hidden"] = hide_ai
+        out["findings"] = [finding_dict(r) for r in rows if not (hide_ai and r["source"] == "ai")]
+        if d["golden_case_id"] and d["review_status"] == "completed":  # 完成前不给前端，避免影响审核人
+            out["golden"] = golden_cases().get(d["golden_case_id"])
+    return out
+
+
+@app.get("/api/documents/{doc_id}")
+def get_document(doc_id: int):
+    return document_view(doc_id)
+
+
+@app.delete("/api/documents/{doc_id}")
+def delete_document(doc_id: int, request: Request):
+    if me(request)["role"] != "admin":
+        raise HTTPException(403, "只有管理员可以删除材料")
+    with db() as con:
+        load_doc(con, doc_id)
+        con.execute("DELETE FROM dropped WHERE doc_id=?", (doc_id,))
+        con.execute("DELETE FROM documents WHERE id=?", (doc_id,))
+        log_event(con, doc_id, "deleted", reviewer=me(request)["name"])
+    return {"ok": True}
+
+
+@app.post("/api/documents/{doc_id}/retry")
+def retry(doc_id: int):
+    with db() as con:
+        if load_doc(con, doc_id)["status"] != "failed":  # 已完成的重跑会清掉复核记录，不允许
+            raise HTTPException(409, "只有失败的初审可以重试")
+    enqueue(doc_id)
+    return {"ok": True}
+
+
 @app.post("/api/documents/{doc_id}/heartbeat")
 async def heartbeat(doc_id: int, request: Request):
     body = await request.json()
-    delta = max(0, min(int(body.get("active_ms", 0)), 30000))  # 单次最多记 30 秒，防止异常值
+    delta = max(0, min(_int(body.get("active_ms")), 30000))  # 单次最多记 30 秒，防止异常值
     with db() as con:
         d = load_doc(con, doc_id)
         if d["review_status"] == "completed" or d["status"] != "done":
             return {"active_ms": d["active_ms"]}
         con.execute("UPDATE documents SET active_ms=active_ms+?, review_status='in_progress',"
-                    " review_started_at=COALESCE(review_started_at, ?), reviewer=COALESCE(?, reviewer) WHERE id=?",
-                    (delta, time.time(), body.get("reviewer") or None, doc_id))
+                    " review_started_at=COALESCE(review_started_at, ?), reviewer=COALESCE(reviewer, ?) WHERE id=?",
+                    (delta, time.time(), me(request)["name"], doc_id))
         return {"active_ms": d["active_ms"] + delta}
 
 
 @app.patch("/api/findings/{fid}")
 async def decide(fid: int, request: Request):
     body = await request.json()
+    decision, rr = body.get("decision"), body.get("reject_reason")
+    note, edited = _s(body.get("note")), _s(body.get("edited_suggestion"))
+    if decision not in ("accepted", "modified", "rejected", None):
+        raise HTTPException(400, "decision 不合法")
+    if decision == "rejected" and rr not in REJECT_REASONS:
+        raise HTTPException(400, "驳回须选择原因")
+    if decision == "rejected" and rr == "other" and not note:
+        raise HTTPException(400, "选择“其他”时请填写说明")
+    if decision == "modified" and not edited:
+        raise HTTPException(400, "修改时请填写修改后的意见")
     with db() as con:
-        f = con.execute("SELECT * FROM findings WHERE id=?", (fid,)).fetchone()
-        if not f:
-            raise HTTPException(404, "意见不存在")
-        d = load_doc(con, f["doc_id"])
-        _editable(d)
-        decision = body.get("decision")
-        if decision not in ("accepted", "modified", "rejected", None):
-            raise HTTPException(400, "decision 不合法")
-        rr = body.get("reject_reason")
-        if decision == "rejected" and rr not in REJECT_REASONS:
-            raise HTTPException(400, "驳回须选择原因")
-        if decision == "rejected" and rr == "other" and not (body.get("note") or "").strip():
-            raise HTTPException(400, "选择“其他”时请填写说明")
-        if decision == "modified" and not (body.get("edited_suggestion") or "").strip():
-            raise HTTPException(400, "修改时请填写修改后的意见")
+        f = load_finding(con, fid)
+        if f["source"] != "ai":
+            raise HTTPException(400, "人工补充的问题不需要处理")
+        _editable(load_doc(con, f["doc_id"]))
         con.execute("UPDATE findings SET decision=?, reject_reason=?, note=?, edited_suggestion=?, decided_at=?,"
                     " elapsed_ms=COALESCE(elapsed_ms,0)+? WHERE id=?",
-                    (decision, rr if decision == "rejected" else None, (body.get("note") or "").strip() or None,
-                     (body.get("edited_suggestion") or "").strip() if decision == "modified" else None,
-                     time.time() if decision else None, max(0, int(body.get("elapsed_ms") or 0)), fid))
-        log_event(con, f["doc_id"], "decision", {k: body.get(k) for k in
-                  ("decision", "reject_reason", "note", "edited_suggestion", "elapsed_ms")},
-                  finding_id=fid, reviewer=body.get("reviewer"))
-        return finding_dict(con.execute("SELECT * FROM findings WHERE id=?", (fid,)).fetchone())
+                    (decision, rr if decision == "rejected" else None, note or None,
+                     edited if decision == "modified" else None, time.time() if decision else None,
+                     max(0, _int(body.get("elapsed_ms"))), fid))
+        log_event(con, f["doc_id"], "decision", {"decision": decision, "reject_reason": rr, "note": note,
+                  "edited_suggestion": edited, "elapsed_ms": body.get("elapsed_ms")},
+                  finding_id=fid, reviewer=me(request)["name"])
+        return finding_dict(load_finding(con, fid))
 
 
 @app.post("/api/documents/{doc_id}/findings")
@@ -408,89 +405,86 @@ async def add_manual(doc_id: int, request: Request):
         rid = body.get("rule_id")
         if rid not in RULES:
             raise HTTPException(400, "请选择规则")
-        s, e = int(body.get("start", -1)), int(body.get("end", -1))
+        s, e = _int(body.get("start"), -1), _int(body.get("end"), -1)
         if not (0 <= s < e <= len(d["text"])):
             raise HTTPException(400, "请先在原文中划选片段")
-        quote = d["text"][s:e]
-        gi = (con.execute("SELECT MAX(group_idx) FROM findings WHERE doc_id=?", (doc_id,)).fetchone()[0] or 0) + 1000
+        quote_ = d["text"][s:e]
+        # 人工问题各自成组，排在 AI 组之后（组号只用于分组，前端按原文位置编号）
+        top = con.execute("SELECT MAX(group_idx) FROM findings WHERE doc_id=?", (doc_id,)).fetchone()[0] or 0
         cur = con.execute(
             "INSERT INTO findings(doc_id, source, group_idx, rule_id, quote, spans, reason, suggestion, decision,"
             " decided_at, elapsed_ms, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (doc_id, "manual", gi, rid, quote, json.dumps([[s, e]]), (body.get("reason") or "").strip(),
-             (body.get("suggestion") or "").strip(), "accepted", time.time(),
-             max(0, int(body.get("elapsed_ms") or 0)), time.time()))
-        log_event(con, doc_id, "manual_add", {"rule_id": rid, "quote": quote}, finding_id=cur.lastrowid,
-                  reviewer=body.get("reviewer"))
-        return finding_dict(con.execute("SELECT * FROM findings WHERE id=?", (cur.lastrowid,)).fetchone())
+            (doc_id, "manual", max(1000, top + 1), rid, quote_, json.dumps([[s, e]]), _s(body.get("reason")),
+             _s(body.get("suggestion")), "accepted", time.time(), max(0, _int(body.get("elapsed_ms"))), time.time()))
+        log_event(con, doc_id, "manual_add", {"rule_id": rid, "quote": quote_}, finding_id=cur.lastrowid,
+                  reviewer=me(request)["name"])
+        return finding_dict(load_finding(con, cur.lastrowid))
 
 
 @app.delete("/api/findings/{fid}")
-def delete_manual(fid: int):
+def delete_manual(fid: int, request: Request):
     with db() as con:
-        f = con.execute("SELECT * FROM findings WHERE id=?", (fid,)).fetchone()
-        if not f or f["source"] != "manual":
+        f = load_finding(con, fid)
+        if f["source"] != "manual":
             raise HTTPException(400, "只能删除人工补充的问题")
         _editable(load_doc(con, f["doc_id"]))
         con.execute("DELETE FROM findings WHERE id=?", (fid,))
-        log_event(con, f["doc_id"], "manual_delete", {"rule_id": f["rule_id"]}, finding_id=fid)
+        log_event(con, f["doc_id"], "manual_delete", {"rule_id": f["rule_id"]}, finding_id=fid,
+                  reviewer=me(request)["name"])
     return {"ok": True}
 
 
 @app.post("/api/documents/{doc_id}/complete")
 async def complete(doc_id: int, request: Request):
     body = await request.json()
+    if body.get("conclusion") not in CONCLUSIONS:
+        raise HTTPException(400, "请选择审查结论")
+    who = me(request)["name"]
     with db() as con:
         d = load_doc(con, doc_id)
         _editable(d)
-        if body.get("conclusion") not in CONCLUSIONS:
-            raise HTTPException(400, "请选择审查结论")
-        if d["arm"] == "ai":
-            left = con.execute("SELECT COUNT(*) FROM findings WHERE doc_id=? AND source='ai' AND decision IS NULL",
-                               (doc_id,)).fetchone()[0]
-            if left:
-                raise HTTPException(400, f"还有 {left} 条 AI 意见未处理")
+        left = con.execute("SELECT COUNT(*) FROM findings WHERE doc_id=? AND source='ai' AND decision IS NULL",
+                           (doc_id,)).fetchone()[0]
+        if d["arm"] == "ai" and left:
+            raise HTTPException(400, f"还有 {left} 条 AI 意见未处理")
+        now = time.time()
         con.execute("UPDATE documents SET review_status='completed', review_completed_at=?, conclusion=?,"
-                    " summary_note=?, reviewer=COALESCE(?, reviewer),"
-                    " review_started_at=COALESCE(review_started_at, ?) WHERE id=?",
-                    (time.time(), body["conclusion"], (body.get("summary_note") or "").strip() or None,
-                     body.get("reviewer") or None, time.time(), doc_id))
+                    " summary_note=?, reviewer=?, review_started_at=COALESCE(review_started_at, ?) WHERE id=?",
+                    (now, body["conclusion"], _s(body.get("summary_note")) or None, who, now, doc_id))
         log_event(con, doc_id, "completed", {"conclusion": body["conclusion"], "active_ms": d["active_ms"]},
-                  reviewer=body.get("reviewer"))
+                  reviewer=who)
     return {"ok": True}
 
 
 @app.post("/api/documents/{doc_id}/reopen")
-def reopen(doc_id: int):
+def reopen(doc_id: int, request: Request):
     with db() as con:
         d = load_doc(con, doc_id)
+        if d["review_status"] != "completed":
+            raise HTTPException(409, "审查尚未完成")
         if d["arm"] == "control":
             raise HTTPException(409, "对照组完成后已看过 AI 意见，不能重新打开，否则计时和结果会被污染")
         con.execute("UPDATE documents SET review_status='in_progress', review_completed_at=NULL WHERE id=?",
                     (doc_id,))
-        log_event(con, doc_id, "reopened")
+        log_event(con, doc_id, "reopened", reviewer=me(request)["name"])
     return {"ok": True}
 
 
 @app.get("/api/documents/{doc_id}/report.{fmt}")
 def export_report(doc_id: int, fmt: str):
-    data = get_document(doc_id)
-    with db() as con:
-        data["events"] = [dict(r) for r in con.execute(
-            "SELECT type, payload, reviewer, ts FROM events WHERE doc_id=? ORDER BY id", (doc_id,))]
-    fname = f"审查报告_{doc_id}"
+    data = document_view(doc_id)
+    disp = {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(f'审查报告_{doc_id}')}.{fmt}"}
     if fmt == "html":
         return HTMLResponse(report.to_html(data, REJECT_REASONS, CONCLUSIONS))
     if fmt == "md":
         return PlainTextResponse(report.to_md(data, REJECT_REASONS, CONCLUSIONS), media_type="text/markdown",
-                                 headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(fname)}.md"})
+                                 headers=disp)
     if fmt == "json":
-        return JSONResponse(data, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{_q(fname)}.json"})
+        with db() as con:
+            data["events"] = [dict(r) for r in con.execute(
+                "SELECT type, payload, reviewer, ts FROM events WHERE doc_id=? ORDER BY id", (doc_id,))]
+        return JSONResponse(data, headers=disp)
     raise HTTPException(404)
-
-
-def _q(s):
-    from urllib.parse import quote
-    return quote(s)
 
 
 # ---------- 度量 ----------
@@ -506,15 +500,14 @@ def metrics():
     arms = {}
     for arm in ("ai", "control"):
         ds = [d for d in docs if d["arm"] == arm]
-        mins = [d["active_ms"] / 60000 for d in ds]
+        mins = sorted(d["active_ms"] / 60000 for d in ds)
         ai = [f for d in ds for f in by_doc.get(d["id"], []) if f["source"] == "ai"]
         manual = [f for d in ds for f in by_doc.get(d["id"], []) if f["source"] == "manual"]
         a = {"docs": len(ds), "avg_minutes": round(sum(mins) / len(mins), 2) if mins else None,
-             "median_minutes": round(sorted(mins)[len(mins) // 2], 2) if mins else None,
-             "manual_findings": len(manual),
+             "median_minutes": round(mins[len(mins) // 2], 2) if mins else None,
              "manual_per_doc": round(len(manual) / len(ds), 2) if ds else None}
         if arm == "ai":
-            dec = {k: sum(1 for f in ai if f["decision"] == k) for k in ("accepted", "modified", "rejected")}
+            dec = {k: sum(f["decision"] == k for f in ai) for k in ("accepted", "modified", "rejected")}
             reasons = {}
             for f in ai:
                 if f["decision"] == "rejected":
@@ -523,11 +516,10 @@ def metrics():
             a.update(ai_findings=len(ai), decisions=dec, reject_reasons=reasons,
                      adoption_rate=round((dec["accepted"] + dec["modified"]) / total, 3) if total else None)
         else:
-            # 对照组：AI 也跑了但对审核人隐藏，可比较两边各自发现了什么（按 文档+规则 对齐）
+            # 对照组：AI 也跑了但对审核人隐藏，可比较两边各自发现了什么（按 材料+规则 对齐）
             human = {(f["doc_id"], f["rule_id"]) for f in manual}
             aiset = {(f["doc_id"], f["rule_id"]) for f in ai}
-            a.update(ai_findings_hidden=len(ai), human_issue_rules=len(human),
-                     ai_also_found=len(human & aiset), ai_only=len(aiset - human))
+            a.update(human_issue_rules=len(human), ai_also_found=len(human & aiset), ai_only=len(aiset - human))
         arms[arm] = a
     per_rule = {}
     for d in docs:
@@ -543,8 +535,7 @@ def metrics():
                 r["adopted"] += f["decision"] in ("accepted", "modified")
                 r["rejected"] += f["decision"] == "rejected"
     # 黄金集：审核人最终认定的问题（采纳/修改/人工补充）对照预期标注
-    gold = golden_cases()
-    g_rows = []
+    gold, g_rows = golden_cases(), []
     for d in docs:
         c = gold.get(d["golden_case_id"] or "")
         if not c:
@@ -556,7 +547,7 @@ def metrics():
                        "final_missed": sorted(exp - final), "ai_missed": sorted(exp - ai_all),
                        "minutes": round(d["active_ms"] / 60000, 2)})
     return {"arms": arms, "per_rule": sorted(per_rule.values(), key=lambda r: -(r["ai"] + r["manual"])),
-            "golden": g_rows, "reject_reason_labels": REJECT_REASONS}
+            "golden": g_rows}
 
 
 # ---------- 黄金集演示 ----------
@@ -569,16 +560,8 @@ def golden_cases():
 
 @app.get("/api/golden")
 def list_golden():
-    return [{"id": c["id"], "doc_type": c.get("doc_type", "public"), "preview": c["text"][:60],
-             "expected": [e["rule_id"] for e in c["expected"]]} for c in golden_cases().values()]
-
-
-@app.get("/api/golden/{case_id}")
-def get_golden(case_id: str):
-    c = golden_cases().get(case_id)
-    if not c:
-        raise HTTPException(404, "样例不存在")
-    return {"id": c["id"], "doc_type": c.get("doc_type", "public"), "text": c["text"]}
+    # 不返回预期标注，避免演示时提前暴露答案
+    return [{"id": c["id"], "doc_type": c.get("doc_type", "public"), "text": c["text"]} for c in golden_cases().values()]
 
 
 # ---------- 前端 ----------

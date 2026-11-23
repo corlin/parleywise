@@ -24,6 +24,7 @@ async function api(path, opts = {}) {
   }
   const r = await fetch(path, init);
   const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && path !== "/api/login") { showLogin(); throw Object.assign(new Error("请先登录"), { auth: true }); }
   if (!r.ok) throw new Error(data.detail || `请求失败（${r.status}）`);
   return data;
 }
@@ -35,10 +36,9 @@ function toast(msg, err = false) {
 }
 const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—";
 const fmtDur = ms => { const s = Math.round((ms || 0) / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
-const reviewer = () => localStorage.getItem("reviewer") || "";
 const STAGES = [["keyword", "关键词初筛"], ["triage", "模型初筛（召回优先）"], ["review", "模型复核（压误报）"], ["verify", "校验原文片段与条款"]];
 const SEV = { high: "高", medium: "中", low: "低" };
-let META = { reject_reasons: {}, conclusions: {} }, RULES = [];
+let META = { reject_reasons: {}, conclusions: {}, rules: [], user: null };
 let cleanup = []; // 路由切换时执行的清理函数
 
 // ---------- 路由 ----------
@@ -54,7 +54,7 @@ async function route() {
     else if (hash.startsWith("#/new")) await pageNew(app);
     else if (hash.startsWith("#/metrics")) await pageMetrics(app);
     else await pageList(app);
-  } catch (e) { app.append(h("div", { class: "empty" }, h("h3", {}, "出错了"), e.message)); }
+  } catch (e) { if (!e.auth) app.append(h("div", { class: "empty" }, h("h3", {}, "出错了"), e.message)); }
   window.scrollTo(0, 0);
 }
 
@@ -79,7 +79,7 @@ async function pageList(app) {
     if (d.status === "failed") st = h("span", {}, h("span", { class: "dot fail" }), " 初审失败");
     else if (!ai) st = h("span", {}, h("span", { class: "dot run" }), " ", (STAGES.find(s => s[0] === d.stage) || [0, "排队中"])[1]);
     else if (d.review_status === "completed") st = h("span", {}, h("span", { class: "dot ok" }), " 已完成");
-    else if (d.arm === "control") st = h("span", { class: "muted" }, d.review_status === "in_progress" ? "复核中" : "待复核");
+    else if (d.arm === "control" || !d.ai_findings) st = h("span", { class: "muted" }, d.review_status === "in_progress" ? "复核中" : "待复核");
     else st = h("span", {}, h("span", { class: "progress-bar" }, h("i", { style: `width:${pct}%` })), ` ${d.ai_decided}/${d.ai_findings}`);
     tb.append(h("tr", { class: "click", onclick: () => (location.hash = `#/doc/${d.id}`) },
       h("td", { class: "title", title: d.title }, d.title),
@@ -98,7 +98,7 @@ async function pageList(app) {
     h("thead", {}, h("tr", {}, ...["材料", "类型", "组别", "AI 意见", "状态", "审查用时", "结论", "创建"].map((t, i) =>
       h("th", { class: [1, 5, 7].includes(i) ? "hide-sm" : null }, t)))), tb)));
   if (docs.some(d => d.status === "queued" || d.status === "running")) {
-    const t = setTimeout(() => location.hash.match(/^#\/?$/) || !location.hash ? route() : null, 3000);
+    const t = setTimeout(route, 3000);
     cleanup.push(() => clearTimeout(t));
   }
 }
@@ -135,7 +135,7 @@ async function pageNew(app) {
     const fd = new FormData();
     fd.append("title", title.value); fd.append("doc_type", docType.value);
     fd.append("arm", control.checked ? "control" : "ai"); fd.append("mode", offline.checked ? "offline" : "full");
-    fd.append("reviewer", reviewer()); fd.append("golden_case_id", goldenId);
+    fd.append("golden_case_id", goldenId);
     if (tab === "file") { if (!file) return toast("请先选择文件", true); fd.append("file", file); }
     else { if (!text.value.trim()) return toast("请粘贴材料内容", true); fd.append("text", text.value); }
     submit.disabled = true; submit.textContent = "提交中…";
@@ -143,11 +143,10 @@ async function pageNew(app) {
     catch (e) { toast(e.message, true); submit.disabled = false; submit.textContent = "开始 AI 初审"; }
   });
   const goldenSel = h("select", { class: "input" }, h("option", { value: "" }, "选择一个合成样例…"),
-    ...golden.map(g => h("option", { value: g.id }, `${g.id} · ${g.expected.length ? "违规" : "合规"} · ${g.preview.slice(0, 22)}…`)));
-  goldenSel.addEventListener("change", async () => {
+    ...golden.map(g => h("option", { value: g.id }, `${g.id} · ${g.text.slice(0, 26)}…`)));
+  goldenSel.addEventListener("change", () => {
     const g = golden.find(x => x.id === goldenSel.value); if (!g) return;
-    const all = await fetch("/api/golden/" + g.id).then(r => r.ok ? r.json() : null); // 列表只有预览
-    setTab("paste"); text.value = all ? all.text : g.preview; count.textContent = `${text.value.length} 字`;
+    setTab("paste"); text.value = g.text; count.textContent = `${text.value.length} 字`;
     title.value = `黄金集 ${g.id}`; docType.value = g.doc_type; goldenId = g.id;
   });
   app.append(h("div", { class: "new-wrap" },
@@ -158,6 +157,7 @@ async function pageNew(app) {
         h("label", { class: "field" }, h("span", {}, "材料类型"), docType),
         h("label", { class: "check" }, control, h("span", {}, "对照组（不显示 AI 意见）", h("small", {}, "AI 仍在后台初审，但审核人看不到，用于测量“没有 AI 时”的耗时和发现数。完成后可对比。"))),
         h("label", { class: "check" }, offline, h("span", {}, "仅关键词（不调用模型）", h("small", {}, "几秒出结果，只用于演示界面。"))),
+        META.key_configured ? null : h("p", { class: "small", style: "color:var(--high);margin:0 0 12px" }, "服务器未配置模型 key，只能用“仅关键词”模式。"),
         submit,
         h("p", { class: "faint small", style: "margin:12px 0 0" }, "材料会经 LiteLLM 网关发送给模型做初审。正式试点前请确认数据出境与保密要求。")),
       golden.length ? h("div", { class: "panel", style: "padding:16px 20px;margin-top:12px" },
@@ -169,7 +169,7 @@ async function pageNew(app) {
 async function pageDoc(app, id) {
   let doc = await api(`/api/documents/${id}`);
   if (doc.status !== "done") return pageProcessing(app, doc);
-  const S = { doc, active: 0, editing: null, rejecting: null, expanded: new Set(), focusAt: performance.now(), spent: {} };
+  const S = { doc, active: 0, editing: null, rejecting: null, expanded: new Set(), focusAt: performance.now() };
   const ro = () => S.doc.review_status === "completed";
 
   // —— 计时：页面可见且 2 分钟内有操作才计时，每 15 秒上报一次
@@ -179,7 +179,7 @@ async function pageDoc(app, id) {
   const isActive = () => !ro() && document.visibilityState === "visible" && Date.now() - lastAct < 120000;
   const flush = (beacon = false) => {
     if (!pendingMs) return;
-    const body = JSON.stringify({ active_ms: Math.min(pendingMs, 30000), reviewer: reviewer() });
+    const body = JSON.stringify({ active_ms: Math.min(pendingMs, 30000) });
     pendingMs = 0;
     if (beacon) navigator.sendBeacon(`/api/documents/${id}/heartbeat`, new Blob([body], { type: "application/json" }));
     else fetch(`/api/documents/${id}/heartbeat`, { method: "POST", headers: { "Content-Type": "application/json" }, body }).catch(() => {});
@@ -225,6 +225,7 @@ async function pageDoc(app, id) {
       d.arm === "ai" && !ro() ? h("span", { class: "muted" }, `已处理 ${decided}/${aiF.length}`) : null,
       ro() ? null : h("span", { class: "timer", id: "timer", title: "有效审查时长：页面可见且 2 分钟内有操作才计时" }, "⏱ ", h("span", {}, fmtDur(shownMs))),
       h("a", { class: "btn", href: `/api/documents/${id}/report.html`, target: "_blank" }, ro() ? "查看报告" : "预览报告"),
+      META.user.role === "admin" ? h("button", { class: "btn ghost", onclick: delDoc, title: "删除这份材料及其复核记录" }, "删除") : null,
       ro() ? h("button", { class: "btn", onclick: reopen, disabled: d.arm === "control" }, "重新打开")
         : h("button", { class: "btn primary", onclick: openComplete }, "完成审查")));
     if (ro()) app.append(h("div", { class: "banner done" },
@@ -398,7 +399,7 @@ async function pageDoc(app, id) {
   cleanup.push(() => document.removeEventListener("keydown", onKey));
 
   // —— 操作
-  function takeElapsed(f) {
+  function takeElapsed() {
     const ms = Math.min(Math.round(performance.now() - S.focusAt), 600000);
     S.focusAt = performance.now();
     return ms;
@@ -406,7 +407,7 @@ async function pageDoc(app, id) {
   async function decide(f, decision, extra = {}) {
     if (ro()) return;
     try {
-      const nf = await api(`/api/findings/${f.id}`, { method: "PATCH", json: { decision, ...extra, elapsed_ms: takeElapsed(f), reviewer: reviewer() } });
+      const nf = await api(`/api/findings/${f.id}`, { method: "PATCH", json: { decision, ...extra, elapsed_ms: takeElapsed() } });
       Object.assign(f, nf); S.editing = S.rejecting = null;
       // 处理完自动跳到下一条未处理的
       const F = flat(); const next = F.findIndex((x, j) => j > S.active && x.source === "ai" && !x.decision);
@@ -420,6 +421,10 @@ async function pageDoc(app, id) {
     if (!confirm("删除这条人工补充的问题？")) return;
     try { await api(`/api/findings/${f.id}`, { method: "DELETE" }); S.doc.findings = S.doc.findings.filter(x => x.id !== f.id); render(); }
     catch (e) { toast(e.message, true); }
+  }
+  async function delDoc() {
+    if (!confirm(`删除「${S.doc.title}」及其全部复核记录？此操作不能撤销。`)) return;
+    try { await api(`/api/documents/${id}`, { method: "DELETE" }); location.hash = "#/"; } catch (e) { toast(e.message, true); }
   }
   async function reopen() {
     try { await api(`/api/documents/${id}/reopen`, { json: {} }); S.doc = await api(`/api/documents/${id}`); render(); }
@@ -459,7 +464,7 @@ async function pageDoc(app, id) {
   function openManual([s, e]) {
     const quote = S.doc.text.slice(s, e), t0 = performance.now();
     let rule = null;
-    const rules = RULES.filter(r => (r.applies_to || S.doc.doc_type) === S.doc.doc_type);
+    const rules = META.rules.filter(r => (r.applies_to || S.doc.doc_type) === S.doc.doc_type);
     const q = h("input", { class: "input", placeholder: "搜索规则编号或关键词，如 R02、保本、基准" });
     const listEl = h("div", { class: "rule-list" });
     const draw = () => {
@@ -478,7 +483,7 @@ async function pageDoc(app, id) {
       "添加", async () => {
         if (!rule) { toast("请选择规则", true); return false; }
         const nf = await api(`/api/documents/${id}/findings`, { json: { rule_id: rule, start: s, end: e, reason: reason.value,
-          suggestion: sugg.value, elapsed_ms: Math.round(performance.now() - t0), reviewer: reviewer() } });
+          suggestion: sugg.value, elapsed_ms: Math.round(performance.now() - t0) } });
         S.doc.findings.push(nf); S.doc.manual_findings++; window.getSelection().removeAllRanges();
         render(); focusIdx(flat().findIndex(f => f.id === nf.id), false); toast("已添加");
       });
@@ -497,7 +502,7 @@ async function pageDoc(app, id) {
       choice, note], "确认完成", async () => {
         flush();
         const c = choice.querySelector("input:checked").value;
-        await api(`/api/documents/${id}/complete`, { json: { conclusion: c, summary_note: note.value, reviewer: reviewer() } });
+        await api(`/api/documents/${id}/complete`, { json: { conclusion: c, summary_note: note.value } });
         S.doc = await api(`/api/documents/${id}`); shownMs = S.doc.active_ms; render(); toast("审查已完成");
       });
   }
@@ -506,7 +511,6 @@ async function pageDoc(app, id) {
 }
 
 function pageProcessing(app, doc) {
-  const cur = STAGES.findIndex(s => s[0] === doc.stage);
   app.append(h("div", { class: "page-head" }, h("a", { class: "btn ghost", href: "#/" }, "← 返回"), h("h1", {}, doc.title)));
   if (doc.status === "failed") {
     app.append(h("div", { class: "banner fail" }, h("b", {}, "AI 初审失败"), h("span", {}, doc.error || ""), h("div", { class: "spacer" }),
@@ -520,7 +524,6 @@ function pageProcessing(app, doc) {
       h("div", { class: "muted small" }, doc.mode === "offline" ? "仅关键词，几秒完成" : "通常需要 1 分钟左右，可以先离开，完成后在列表里打开")),
     h("ol", { class: "stepper" }, ...steps.map(([k, label], i) =>
       h("li", { class: ci > i ? "done" : ci === i ? "cur" : "" }, h("span", { class: "n" }, ci > i ? "✓" : i + 1), label)))));
-  void cur;
   const t = setTimeout(route, 2000);
   cleanup.push(() => clearTimeout(t));
 }
@@ -586,10 +589,35 @@ async function pageMetrics(app) {
 }
 
 // ---------- 启动 ----------
-(async function init() {
-  const rv = $("#reviewer"); rv.value = reviewer();
-  rv.addEventListener("change", () => localStorage.setItem("reviewer", rv.value.trim()));
-  [META, RULES] = await Promise.all([api("/api/meta"), api("/api/rules")]);
-  window.addEventListener("hashchange", route);
+// ---------- 登录 ----------
+function showLogin() {
+  cleanup.forEach(f => f()); cleanup = [];
+  $("#topnav").hidden = true;
+  const user = h("input", { class: "input", autocomplete: "username", placeholder: "用户名" });
+  const pw = h("input", { class: "input", type: "password", autocomplete: "current-password", placeholder: "口令" });
+  const err = h("div", { class: "small", style: "color:var(--high);min-height:20px" });
+  const btn = h("button", { class: "btn primary", type: "submit", style: "width:100%;justify-content:center" }, "登录");
+  const form = h("form", { class: "panel login" }, h("div", { class: "brand", style: "margin-bottom:16px" }, h("span", { class: "logo" }, "审"), "合规初审工作台"),
+    h("label", { class: "field" }, h("span", {}, "用户名"), user), h("label", { class: "field" }, h("span", {}, "口令"), pw), err, btn);
+  form.addEventListener("submit", async e => {
+    e.preventDefault(); btn.disabled = true; err.textContent = "";
+    try { await api("/api/login", { json: { username: user.value, password: pw.value } }); await start(); }
+    catch (x) { err.textContent = x.message; btn.disabled = false; }
+  });
+  $("#app").replaceChildren(form);
+  setTimeout(() => user.focus(), 0);
+}
+
+async function start() {
+  META = await api("/api/meta");
+  $("#topnav").hidden = false;
+  $("#whoami").textContent = `${META.user.name}${META.user.role === "admin" ? "（管理员）" : ""}`;
   route();
+}
+
+// ---------- 启动 ----------
+(function init() {
+  $("#logout").addEventListener("click", async () => { await api("/api/logout", { json: {} }).catch(() => {}); showLogin(); });
+  window.addEventListener("hashchange", () => META.user && route());
+  start().catch(() => {});
 })();

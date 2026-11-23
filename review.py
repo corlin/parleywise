@@ -66,6 +66,14 @@ class LLM:
         self.usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
 
     def chat(self, model, system, user):
+        """返回 findings 列表。回复不是合法 JSON 时重发一次，仍失败就报错，避免把坏回复当成“没问题”。"""
+        for _ in range(2):
+            findings = parse_findings(self._call(model, system, user))
+            if findings is not None:
+                return findings
+        raise RuntimeError(f"模型 {model} 两次返回都无法解析为 JSON")
+
+    def _call(self, model, system, user):
         body = json.dumps({"model": model, "temperature": 0,
                            "response_format": {"type": "json_object"},
                            "messages": [{"role": "system", "content": system},
@@ -87,22 +95,24 @@ class LLM:
         self.usage["calls"] += 1
         self.usage["prompt_tokens"] += u.get("prompt_tokens", 0)
         self.usage["completion_tokens"] += u.get("completion_tokens", 0)
-        if cost:
-            try:
-                self.usage["cost_usd"] += float(cost)
-            except ValueError:
-                pass
-        content = payload["choices"][0]["message"]["content"]
-        return parse_json(content)
+        try:
+            self.usage["cost_usd"] += float(cost or 0)
+        except ValueError:
+            pass
+        return payload["choices"][0]["message"].get("content") or ""
 
 
-def parse_json(content):
-    content = content.strip()
-    m = re.search(r"\{.*\}", content, re.S)
+def parse_findings(content):
+    """从模型回复里取 findings 列表；无法解析返回 None。"""
+    m = re.search(r"\{.*\}", content.strip(), re.S)
     try:
-        return json.loads(m.group(0) if m else content)
+        data = json.loads(m.group(0) if m else content)
     except json.JSONDecodeError:
-        return {"findings": []}
+        return None
+    fs = data.get("findings") if isinstance(data, dict) else None
+    if not isinstance(fs, list):
+        return None
+    return [f for f in fs if isinstance(f, dict) and isinstance(f.get("quote"), str)]
 
 
 def today():
@@ -135,12 +145,12 @@ def llm_review(text, rules, hints, llm, cheap, strong):
             f"【规则】\n{rules_block(rules)}\n\n【关键词提示（仅供参考）】\n"
             + ("、".join(sorted({h['rule_id'] for h in hints})) or "无")
             + f"\n\n【材料】\n{text}")
-    triage = llm.chat(cheap, TRIAGE_SYS, user).get("findings", [])
+    triage = llm.chat(cheap, TRIAGE_SYS, user)
     if not triage:
         return [], []
     user2 = (f"【今天日期】{today()}\n\n【规则】\n{rules_block(rules)}\n\n【材料】\n{text}\n\n【初审意见】\n"
              + json.dumps(triage, ensure_ascii=False))
-    reviewed = llm.chat(strong, REVIEW_SYS, user2).get("findings", [])
+    reviewed = llm.chat(strong, REVIEW_SYS, user2)
     for f in reviewed:
         f["stage"] = "llm"
     # 记录复核未保留的初审意见，便于排查漏检（只进报告的“被拦下”一节，不计入结果）
@@ -171,14 +181,18 @@ def verify(findings, text, rules):
     return list(by_rule.values()), dropped
 
 
-def review_doc(text, doc_type, all_rules, llm=None, cheap="cheap", strong="strong"):
+def review_doc(text, doc_type, all_rules, llm=None, cheap="cheap", strong="strong", on_stage=None):
+    """完整流水线。on_stage(name) 在进入 keyword / verify 阶段时回调（模型阶段由 LLM 子类自行上报）。"""
+    stage = on_stage or (lambda name: None)
     rules = applicable(all_rules, doc_type)
+    stage("keyword")
     hints = keyword_scan(text, rules)
     findings = [h for h in hints if rules[h["rule_id"]]["check"] == "keyword"]
     rejected = []
     if llm is not None:
         reviewed, rejected = llm_review(text, rules, hints, llm, cheap, strong)
         findings += reviewed
+    stage("verify")
     kept, dropped = verify(findings, text, rules)
     return kept, dropped + rejected
 
@@ -343,7 +357,11 @@ def main():
         cases = [json.loads(l) for l in Path(a.golden).read_text(encoding="utf-8").splitlines() if l.strip()]
         results, t0 = [], time.time()
         for c in cases:
-            kept, dropped = review_doc(c["text"], c.get("doc_type", "public"), rules, llm, cheap, strong)
+            try:
+                kept, dropped = review_doc(c["text"], c.get("doc_type", "public"), rules, llm, cheap, strong)
+            except RuntimeError as e:  # 单篇失败不中断整批评测，按“全部漏检”计
+                print(f"{c['id']} 失败：{e}", file=sys.stderr)
+                kept, dropped = [], []
             results.append((c, kept))
             (out / f"{c['id']}.md").write_text(to_markdown(c["id"], c["text"], kept, dropped, rules), encoding="utf-8")
             rec = to_record(c["id"], c["text"], c.get("doc_type", "public"), kept, dropped, rules)

@@ -1,5 +1,5 @@
 """审查报告导出：HTML（可打印/存 PDF）与 Markdown。"""
-import datetime, json, re
+import datetime, json, re, time
 from pathlib import Path
 from html import escape
 
@@ -20,6 +20,10 @@ def _split(doc):
     rejected = [f for f in fs if f["decision"] == "rejected"]
     pending = [f for f in fs if f["source"] == "ai" and not f["decision"]]
     return final, rejected, pending
+
+
+def _src(f):
+    return "人工补充" if f["source"] == "manual" else ("AI·已修改" if f["decision"] == "modified" else "AI·采纳")
 
 
 def _opinion(f):
@@ -55,11 +59,10 @@ def to_html(doc, reasons, conclusions):
     rows = []
     for i, f in enumerate(final, 1):
         r = f["rule"]
-        tag = "人工补充" if f["source"] == "manual" else ("AI·已修改" if f["decision"] == "modified" else "AI·采纳")
         rows.append(f"""<tr><td>{i}</td><td><b>{escape(r['id'] or '')} {escape(r['title'] or '')}</b>
 <div class="muted">{escape(r['article'] or '')}｜{escape(_law(r['source']))}</div></td>
 <td>「{escape(f['quote'])}」</td><td>{escape(f['reason'] or '')}<div class="op">意见：{escape(_opinion(f))}</div>
-{f'<div class="muted">备注：{escape(f["note"])}</div>' if f.get('note') else ''}</td><td>{tag}</td></tr>""")
+{f'<div class="muted">备注：{escape(f["note"])}</div>' if f.get('note') else ''}</td><td>{_src(f)}</td></tr>""")
     rej = "".join(f"<li><b>{escape(f['rule_id'])} {escape(f['rule']['title'] or '')}</b>「{escape(f['quote'])}」"
                   f" — {escape(reasons.get(f['reject_reason'], ''))}{('：' + escape(f['note'])) if f.get('note') else ''}</li>"
                   for f in rejected)
@@ -97,7 +100,7 @@ mark{{background:#ffe8a3;padding:0 1px}} sup{{color:#b45309;font-weight:600}}
 {'<p>未认定问题。</p>' if not final else '<table><tr><th>#</th><th>规则</th><th>原文片段</th><th>理由与修改意见</th><th>来源</th></tr>' + ''.join(rows) + '</table>'}
 <h2>原文（标注认定问题）</h2><div class="orig">{_marked_text(doc['text'], final)}</div>
 {f'<h2>附录：已驳回的 AI 意见（{len(rejected)} 条）</h2><ul>{rej}</ul>' if rejected else ''}
-<p class="foot">AI 意见仅为初审参考，最终结论以合规审核人判断为准。规则说明为条款转述，以监管原文为准。生成时间 {_t(__import__('time').time())}。</p>
+<p class="foot">AI 意见仅为初审参考，最终结论以合规审核人判断为准。规则说明为条款转述，以监管原文为准。生成时间 {_t(time.time())}。</p>
 </body></html>"""
 
 
@@ -116,8 +119,7 @@ def to_md(doc, reasons, conclusions):
     L += [f"## 认定问题（{len(final)} 项）", ""]
     for i, f in enumerate(final, 1):
         r = f["rule"]
-        src = "人工补充" if f["source"] == "manual" else ("AI·已修改" if f["decision"] == "modified" else "AI·采纳")
-        L += [f"{i}. **{r['id']} {r['title']}**（{_law(r['source'])}{r['article']}，{src}）",
+        L += [f"{i}. **{r['id']} {r['title']}**（{_law(r['source'])}{r['article']}，{_src(f)}）",
               f"    - 原文片段：「{f['quote']}」",
               f"    - 理由：{f['reason'] or '—'}",
               f"    - 意见：{_opinion(f)}"]

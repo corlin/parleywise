@@ -42,6 +42,7 @@ uv run review.py --text-file 某篇文案.txt
 给合规人员用的网页：粘贴或上传材料 → AI 初审（复用 `review.py` 流水线）→ 逐条采纳/修改/驳回 → 补充 AI 漏报 → 导出报告；同时记录有效审查时长、驳回原因和人工补充问题，供度量页统计。设计说明见 `app/DESIGN.md`。
 
 ```bash
-uv run uvicorn app.main:app --port 8000   # 打开 http://127.0.0.1:8000
+uv run python -m app.auth add <用户名> <姓名> --admin   # 第一次先建账号
+./run.sh                                               # 打开 http://127.0.0.1:8000
 ```
-数据存在 `app/data/hiagent.db`（已 gitignore）。上传支持 .txt/.md/.docx/.pdf（不含扫描件 OCR）。没有登录，只适合本机使用；试点部署前要加登录。
+数据存在 `app/data/hiagent.db`（已 gitignore）。上传支持 .txt/.md/.docx/.pdf（不含扫描件 OCR）。试点部署见 `app/DEPLOY.md`。
