@@ -120,7 +120,9 @@ TRIAGE_SYS = ("你是基金营销材料合规初审助手。逐条对照给定�
 
 REVIEW_SYS = ("你是资深基金合规审核员，负责复核初审意见。对每条初审意见判断是否真的违反所引规则："
               "材料中已有合规声明或免责表述的，不算违规；规则要求“缺少某项”的，须确认全文（含文末声明）确实没有；"
-              "同一处问题只归入最贴切的一条规则，不要重复归类。"
+              "同一片段可以同时违反多条规则：逐条判断每条规则自身的要求是否被违反，各自成立就各自保留，"
+              "不要因为已归入一条规则就放弃另一条（例如“缺少某项必备内容”与“表述本身不当”是不同要求）；"
+              "只有两条意见针对的是同一项要求、仅措辞不同的，才合并为最贴切的一条。"
               "只输出 JSON：{\"findings\":[...保留的意见，字段同输入，可修改 reason/suggestion/confidence...]}。"
               "quote 必须保持为材料原文的连续子串。")
 
@@ -132,13 +134,16 @@ def llm_review(text, rules, hints, llm, cheap, strong):
             + f"\n\n【材料】\n{text}")
     triage = llm.chat(cheap, TRIAGE_SYS, user).get("findings", [])
     if not triage:
-        return []
+        return [], []
     user2 = (f"【今天日期】{today()}\n\n【规则】\n{rules_block(rules)}\n\n【材料】\n{text}\n\n【初审意见】\n"
              + json.dumps(triage, ensure_ascii=False))
     reviewed = llm.chat(strong, REVIEW_SYS, user2).get("findings", [])
     for f in reviewed:
         f["stage"] = "llm"
-    return reviewed
+    # 记录复核未保留的初审意见，便于排查漏检（只进报告的“被拦下”一节，不计入结果）
+    kept_rules = {f.get("rule_id") for f in reviewed}
+    rejected = [{**t, "drop_reason": "复核未保留"} for t in triage if t.get("rule_id") not in kept_rules]
+    return reviewed, rejected
 
 
 # ---------- 4. 校验器 ----------
@@ -167,9 +172,12 @@ def review_doc(text, doc_type, all_rules, llm=None, cheap="cheap", strong="stron
     rules = applicable(all_rules, doc_type)
     hints = keyword_scan(text, rules)
     findings = [h for h in hints if rules[h["rule_id"]]["check"] == "keyword"]
+    rejected = []
     if llm is not None:
-        findings += llm_review(text, rules, hints, llm, cheap, strong)
-    return verify(findings, text, rules)
+        reviewed, rejected = llm_review(text, rules, hints, llm, cheap, strong)
+        findings += reviewed
+    kept, dropped = verify(findings, text, rules)
+    return kept, dropped + rejected
 
 
 # ---------- 报告与评测 ----------
