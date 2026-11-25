@@ -6,7 +6,7 @@
   uv run python -m app.auth disable <用户名> | enable <用户名>
   uv run python -m app.auth list
 """
-import getpass, hashlib, hmac, secrets, sys, time
+import getpass, hashlib, hmac, re, secrets, sqlite3, sys, time
 
 from . import db
 
@@ -75,6 +75,41 @@ def public(u):
 def has_users():
     with db.db() as con:
         return con.execute("SELECT COUNT(*) FROM users WHERE disabled=0").fetchone()[0] > 0
+
+
+def register(username, name, password):
+    username, name = username.strip(), name.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", username):
+        raise ValueError("用户名须为 3–32 位字母、数字或 ._- ")
+    if not 1 <= len(name) <= 60 or not 8 <= len(password) <= 256:
+        raise ValueError("姓名须为 1–60 字，口令须为 8–256 位")
+    try:
+        with db.db() as con:
+            cur = con.execute("INSERT INTO users(username, display_name, pw_hash, role, created_at) VALUES (?,?,?,?,?)",
+                              (username, name, hash_pw(password), "reviewer", time.time()))
+            return public(con.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone())
+    except sqlite3.IntegrityError as e:
+        raise ValueError("用户名已存在") from e
+
+
+def update_profile(user_id, name):
+    name = name.strip()
+    if not 1 <= len(name) <= 60:
+        raise ValueError("姓名须为 1–60 字")
+    with db.db() as con:
+        con.execute("UPDATE users SET display_name=? WHERE id=?", (name, user_id))
+        return public(con.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone())
+
+
+def change_password(user_id, old, new):
+    if not 8 <= len(new) <= 256:
+        raise ValueError("新口令须为 8–256 位")
+    with db.db() as con:
+        u = con.execute("SELECT pw_hash FROM users WHERE id=?", (user_id,)).fetchone()
+        if not u or not check_pw(old, u['pw_hash']):
+            raise ValueError("当前口令不正确")
+        con.execute("UPDATE users SET pw_hash=? WHERE id=?", (hash_pw(new), user_id))
+        con.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
 
 
 # ---------- 命令行 ----------

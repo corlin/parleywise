@@ -1,0 +1,35 @@
+# 配置片段：仅供合并到远端 LiteLLM config.yaml 中同名 model_list 条目的
+# model_info。此文件不是完整的 LiteLLM 配置，不可直接替换原文件。
+# 单位：美元 / token；基于 2026-11-24 官方美元刊例的估算。
+# 节假日、请求跨峰谷边界和上游返回的缓存用量可能造成估算与实际账单不同。
+# Flash: https://staticintl.cloudcachetci.com/doc/pdf/product/pdf/1300_78935_zh.pdf
+# Pro: https://api-docs.deepseek.com/quick_start/pricing/
+model_info_by_existing_model:
+  deepseek-v4-flash-202605:
+    input_cost_per_token: 0.00000030
+    output_cost_per_token: 0.00000120
+    cache_read_input_token_cost: 0.000000006
+    off_peak_pricing:
+      weekday_timezone: Asia/Shanghai
+      windows:
+        - hours_utc: ["00:00-01:00", "04:00-06:00", "10:00-00:00"]
+          weekdays: [mon, tue, wed, thu, fri]
+        - hours_utc: "00:00-00:00"
+          weekdays: [sat, sun]
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000060
+      cache_read_input_token_cost: 0.000000003
+  deepseek-v4-pro:
+    input_cost_per_token: 0.00000132
+    output_cost_per_token: 0.00000396
+    cache_read_input_token_cost: 0.000000044
+    off_peak_pricing:
+      weekday_timezone: Asia/Shanghai
+      windows:
+        - hours_utc: ["00:00-01:00", "04:00-06:00", "10:00-00:00"]
+          weekdays: [mon, tue, wed, thu, fri]
+        - hours_utc: "00:00-00:00"
+          weekdays: [sat, sun]
+      input_cost_per_token: 0.00000066
+      output_cost_per_token: 0.00000198
+      cache_read_input_token_cost: 0.000000022

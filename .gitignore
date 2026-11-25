@@ -3,3 +3,5 @@
 out/
 __pycache__/
 app/data/
+.DS_Store
+**/.DS_Store

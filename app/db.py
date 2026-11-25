@@ -21,6 +21,37 @@ CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   expires_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS conversations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', summary_through INTEGER NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  content TEXT NOT NULL, created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS project_memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL,
+  created_by INTEGER NOT NULL REFERENCES users(id), created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, url TEXT NOT NULL, created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chat_model_settings (
+  id INTEGER PRIMARY KEY CHECK(id = 1), allowed_json TEXT NOT NULL, default_model TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS conversation_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role TEXT NOT NULL, content TEXT NOT NULL, created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS model_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, kind TEXT NOT NULL,
+  conversation_id INTEGER, document_id INTEGER, run_id TEXT, stage TEXT, requested_model TEXT NOT NULL,
+  served_model TEXT, status TEXT NOT NULL, attempt INTEGER NOT NULL, started_at REAL NOT NULL,
+  duration_ms INTEGER NOT NULL, prompt_tokens INTEGER, completion_tokens INTEGER, cost_usd REAL
+);
+CREATE INDEX IF NOT EXISTS model_calls_scope ON model_calls(user_id, kind, id);
 CREATE TABLE IF NOT EXISTS documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL, doc_type TEXT NOT NULL DEFAULT 'public', text TEXT NOT NULL,
@@ -76,6 +107,12 @@ def init():
         cols = {r[1] for r in con.execute("PRAGMA table_info(documents)")}
         if "created_by" not in cols:  # 兼容第一版数据库
             con.execute("ALTER TABLE documents ADD COLUMN created_by TEXT")
+        cols = {r[1] for r in con.execute("PRAGMA table_info(conversations)")}
+        if "summary_through" not in cols:
+            con.execute("ALTER TABLE conversations ADD COLUMN summary_through INTEGER NOT NULL DEFAULT 0")
+        cols = {r[1] for r in con.execute("PRAGMA table_info(model_calls)")}
+        if "run_id" not in cols:
+            con.execute("ALTER TABLE model_calls ADD COLUMN run_id TEXT")
 
 
 def log_event(con, doc_id, typ, payload=None, finding_id=None, reviewer=None):

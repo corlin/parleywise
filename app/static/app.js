@@ -39,21 +39,29 @@ const fmtDur = ms => { const s = Math.round((ms || 0) / 1000); return `${Math.fl
 const STAGES = [["keyword", "关键词初筛"], ["triage", "模型初筛（召回优先）"], ["review", "模型复核（压误报）"], ["verify", "校验原文片段与条款"]];
 const SEV = { high: "高", medium: "中", low: "低" };
 let META = { reject_reasons: {}, conclusions: {}, rules: [], user: null };
+const chatModelChoices = new Map(); // 本页面会话期间按用户和对话保留选择
 let cleanup = []; // 路由切换时执行的清理函数
 
 // ---------- 路由 ----------
 async function route() {
   cleanup.forEach(f => f()); cleanup = [];
-  const hash = location.hash || "#/";
+  const hash = location.hash || "#/chat";
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("active",
-    (a.dataset.nav === "metrics") === hash.startsWith("#/metrics")));
+    a.dataset.nav === "list" ? ["#/documents", "#/doc/", "#/new"].some(x => hash.startsWith(x)) : a.dataset.nav === "chat" ? hash === "#/" || hash.startsWith("#/chat") : hash.startsWith(`#/${a.dataset.nav}`)));
   const app = $("#app"); app.replaceChildren();
   try {
     let m;
     if ((m = hash.match(/^#\/doc\/(\d+)/))) await pageDoc(app, +m[1]);
     else if (hash.startsWith("#/new")) await pageNew(app);
     else if (hash.startsWith("#/metrics")) await pageMetrics(app);
-    else await pageList(app);
+    else if (hash.startsWith("#/calls")) await pageModelCalls(app);
+    else if (hash.startsWith("#/profile")) await pageProfile(app);
+    else if (hash.startsWith("#/chat")) await pageChat(app);
+    else if (hash.startsWith("#/memory")) await pageMemories(app);
+    else if (hash.startsWith("#/mcp")) await pageMcp(app);
+    else if (hash.startsWith("#/models")) await pageAdminModels(app);
+    else if (hash.startsWith("#/documents")) await pageList(app);
+    else await pageChat(app);
   } catch (e) { if (!e.auth) app.append(h("div", { class: "empty" }, h("h3", {}, "出错了"), e.message)); }
   window.scrollTo(0, 0);
 }
@@ -107,7 +115,7 @@ async function pageList(app) {
 async function pageNew(app) {
   let file = null, goldenId = "", tab = "paste";
   const golden = await api("/api/golden").catch(() => []);
-  app.append(h("div", { class: "page-head" }, h("a", { class: "btn ghost", href: "#/" }, "← 返回"), h("h1", {}, "新建审查")));
+  app.append(h("div", { class: "page-head" }, h("a", { class: "btn ghost", href: "#/documents" }, "← 返回"), h("h1", {}, "新建审查")));
   const title = h("input", { type: "text", placeholder: "可留空，默认取文件名或正文开头", maxlength: 80 });
   const docType = h("select", {}, h("option", { value: "public" }, "公募基金宣传推介材料"), h("option", { value: "private" }, "私募基金宣传推介材料"));
   const text = h("textarea", { class: "input", rows: 14, placeholder: "把宣传推介材料的全文粘贴到这里（含文末风险提示和声明）……" });
@@ -217,7 +225,7 @@ async function pageDoc(app, id) {
     app.replaceChildren();
     // 顶栏
     app.append(h("div", { class: "rv-bar" },
-      h("a", { class: "btn ghost", href: "#/" }, "←"),
+      h("a", { class: "btn ghost", href: "#/documents" }, "←"),
       h("h1", { title: d.title }, d.title),
       d.arm === "control" ? h("span", { class: "chip warn" }, "对照组") : h("span", { class: "chip accent" }, "AI 辅助"),
       h("span", { class: "chip" }, d.doc_type === "public" ? "公募" : "私募"),
@@ -225,6 +233,7 @@ async function pageDoc(app, id) {
       d.arm === "ai" && !ro() ? h("span", { class: "muted" }, `已处理 ${decided}/${aiF.length}`) : null,
       ro() ? null : h("span", { class: "timer", id: "timer", title: "有效审查时长：页面可见且 2 分钟内有操作才计时" }, "⏱ ", h("span", {}, fmtDur(shownMs))),
       h("a", { class: "btn", href: `/api/documents/${id}/report.html`, target: "_blank" }, ro() ? "查看报告" : "预览报告"),
+      h("a", { class: "btn ghost", href: `#/calls?document_id=${id}` }, "模型调用"),
       META.user.role === "admin" ? h("button", { class: "btn ghost", onclick: delDoc, title: "删除这份材料及其复核记录" }, "删除") : null,
       ro() ? h("button", { class: "btn", onclick: reopen, disabled: d.arm === "control" }, "重新打开")
         : h("button", { class: "btn primary", onclick: openComplete }, "完成审查")));
@@ -424,7 +433,7 @@ async function pageDoc(app, id) {
   }
   async function delDoc() {
     if (!confirm(`删除「${S.doc.title}」及其全部复核记录？此操作不能撤销。`)) return;
-    try { await api(`/api/documents/${id}`, { method: "DELETE" }); location.hash = "#/"; } catch (e) { toast(e.message, true); }
+    try { await api(`/api/documents/${id}`, { method: "DELETE" }); location.hash = "#/documents"; } catch (e) { toast(e.message, true); }
   }
   async function reopen() {
     try { await api(`/api/documents/${id}/reopen`, { json: {} }); S.doc = await api(`/api/documents/${id}`); render(); }
@@ -511,7 +520,7 @@ async function pageDoc(app, id) {
 }
 
 function pageProcessing(app, doc) {
-  app.append(h("div", { class: "page-head" }, h("a", { class: "btn ghost", href: "#/" }, "← 返回"), h("h1", {}, doc.title)));
+  app.append(h("div", { class: "page-head" }, h("a", { class: "btn ghost", href: "#/documents" }, "← 返回"), h("h1", {}, doc.title), h("a", {class: "btn ghost", href: `#/calls?document_id=${doc.id}`}, "模型调用")));
   if (doc.status === "failed") {
     app.append(h("div", { class: "banner fail" }, h("b", {}, "AI 初审失败"), h("span", {}, doc.error || ""), h("div", { class: "spacer" }),
       h("button", { class: "btn", onclick: async () => { await api(`/api/documents/${doc.id}/retry`, { json: {} }); route(); } }, "重试")));
@@ -545,6 +554,44 @@ function openModal(title, body, okText, onOk) {
 function closeModal() { document.querySelectorAll(".modal-bg").forEach(m => m.remove()); }
 
 // ---------- 度量 ----------
+async function pageModelCalls(app) {
+  const query = new URLSearchParams((location.hash.split('?')[1] || ''));
+  const conversationId = query.get('conversation_id');
+  const documentId = query.get('document_id');
+  const filter = conversationId && /^\d+$/.test(conversationId) ? `conversation_id=${conversationId}`
+    : documentId && /^\d+$/.test(documentId) ? `document_id=${documentId}` : '';
+  const rows = await api('/api/model-calls' + (filter ? `?${filter}` : ''));
+  const title = conversationId ? '本会话的模型调用' : documentId ? '本材料的模型调用' : '模型调用记录';
+  app.append(h('div', {class: 'page-head'}, h('h1', {}, title), h('div', {class:'spacer'}),
+    filter ? h('a', {class:'btn ghost', href:'#/calls'}, '查看全部') : null));
+  app.append(h('p', {class:'muted call-note'}, '每条为一次网关请求尝试，失败重试会分别列出。“已响应”仅表示网关返回，不代表业务结果正确。'));
+  app.append(h('p', {class:'muted call-note'}, '展示本人的会话调用及工作区共享的审查调用；最多显示最近 200 条。记录不含提示词、回复或密钥。启用此功能前的历史调用不会补录。'));
+  if (!rows.length) {
+    app.append(h('div', {class:'panel empty'}, h('h3', {}, '暂无调用记录'), h('p', {}, '后续模型调用完成或失败后会显示在这里。')));
+    return;
+  }
+  const kindLabel = {chat:'对话', compress:'压缩会话', review:'合规审查'};
+  const stageLabel = {triage:'初审', review:'复核'};
+  for (const r of rows) {
+    const task = r.kind === 'review' ? h('a', {href:`#/doc/${r.document_id}`}, `材料 #${r.document_id}`)
+      : h('a', {href:`#/chat/${r.conversation_id}`}, `会话 #${r.conversation_id}`);
+    const token = v => v == null ? '未返回' : String(v);
+    const cost = r.cost_usd == null ? '未返回' : `$${r.cost_usd.toFixed(6)}`;
+    app.append(h('article', {class:'panel call-card'},
+      h('div', {class:'call-head'}, h('b', {}, kindLabel[r.kind] || r.kind), r.stage ? h('span', {class:'chip'}, stageLabel[r.stage] || r.stage) : null,
+        h('span', {class: `call-status ${r.status === 'responded' ? 'call-ok' : 'call-failed'}`}, r.status === 'responded' ? '网关已响应' : '请求失败'),
+        h('div', {class:'spacer'}), h('span', {class:'muted small'}, fmtTime(r.started_at))),
+      h('div', {class:'call-grid'},
+        h('div', {}, h('span', {}, '任务'), task),
+        h('div', {}, h('span', {}, '请求模型'), h('strong', {}, r.requested_model || '未知')),
+        h('div', {}, h('span', {}, '返回模型'), h('strong', {}, r.served_model || '未返回')),
+        h('div', {}, h('span', {}, '耗时 / 尝试'), h('strong', {}, `${(r.duration_ms / 1000).toFixed(1)} 秒 / 第 ${r.attempt} 次`)),
+        h('div', {}, h('span', {}, '输入 / 输出 token'), h('strong', {}, `${token(r.prompt_tokens)} / ${token(r.completion_tokens)}`)),
+        h('div', {}, h('span', {}, '网关费用（USD）'), h('strong', {}, cost))),
+      h('div', {class:'call-id', title:r.run_id || ''}, r.run_id ? `运行 ${r.run_id}` : '无运行标识')));
+  }
+}
+
 async function pageMetrics(app) {
   const m = await api("/api/metrics");
   const A = m.arms.ai, C = m.arms.control;
@@ -590,8 +637,9 @@ async function pageMetrics(app) {
 
 // ---------- 启动 ----------
 // ---------- 登录 ----------
-function showLogin() {
+async function showLogin() {
   cleanup.forEach(f => f()); cleanup = [];
+  META.user = null;
   $("#topnav").hidden = true;
   const user = h("input", { class: "input", autocomplete: "username", placeholder: "用户名" });
   const pw = h("input", { class: "input", type: "password", autocomplete: "current-password", placeholder: "口令" });
@@ -605,13 +653,239 @@ function showLogin() {
     catch (x) { err.textContent = x.message; btn.disabled = false; }
   });
   $("#app").replaceChildren(form);
+  const status = await fetch("/api/registration").then(r => r.json()).catch(() => ({ enabled: false }));
+  if (status.enabled && form.isConnected) form.append(h("button", { class: "btn ghost", type: "button", onclick: showRegister }, "使用邀请码注册"));
   setTimeout(() => user.focus(), 0);
+}
+
+function showRegister() {
+  const username = h("input", { class: "input", required: true, autocomplete: "username", placeholder: "3–32 位字母、数字或 ._-" });
+  const name = h("input", { class: "input", required: true, maxlength: 60 });
+  const password = h("input", { class: "input", type: "password", required: true, minlength: 8, autocomplete: "new-password" });
+  const invite = h("input", { class: "input", type: "password", required: true, autocomplete: "off" });
+  const err = h("div", { class: "small", style: "color:var(--high);min-height:20px" });
+  const submit = h("button", { class: "btn primary", type: "submit" }, "注册");
+  const form = h("form", { class: "panel login" }, h("h1", {}, "注册账号"),
+    h("p", { class: "small muted" }, "加入此工作区后可查看工作区中的材料。"),
+    ...[["用户名", username], ["显示名称", name], ["口令（至少 8 位）", password], ["邀请码", invite]].map(([label, input]) => h("label", { class: "field" }, h("span", {}, label), input)),
+    err, submit, h("button", { class: "btn ghost", type: "button", onclick: showLogin }, "返回登录"));
+  form.addEventListener("submit", async e => {
+    e.preventDefault(); submit.disabled = true; err.textContent = "";
+    try { await api("/api/register", { json: { username: username.value, name: name.value, password: password.value, invite_code: invite.value } }); await showLogin(); toast("注册成功，请登录"); }
+    catch (x) { err.textContent = x.message; submit.disabled = false; }
+  });
+  $("#app").replaceChildren(form);
+}
+
+async function pageProfile(app) {
+  const name = h("input", { class: "input", value: META.user.name, required: true, maxlength: 60 });
+  const profile = h("form", { class: "panel section" }, h("h2", {}, "个人资料"), h("p", { class: "muted" }, `用户名：${META.user.username}`),
+    h("label", { class: "field" }, h("span", {}, "显示名称"), name), h("button", { class: "btn primary", type: "submit" }, "保存"));
+  profile.addEventListener("submit", async e => { e.preventDefault(); try { META.user = await api("/api/profile", { method: "PATCH", json: { name: name.value } }); $("#whoami").textContent = META.user.name; toast("已保存"); } catch (x) { toast(x.message, true); } });
+  const old = h("input", { class: "input", type: "password", required: true, autocomplete: "current-password" });
+  const fresh = h("input", { class: "input", type: "password", required: true, minlength: 8, autocomplete: "new-password" });
+  const passwords = h("form", { class: "panel section" }, h("h2", {}, "修改口令"),
+    ...[["当前口令", old], ["新口令", fresh]].map(([label, input]) => h("label", { class: "field" }, h("span", {}, label), input)),
+    h("p", { class: "small muted" }, "修改后所有登录会话将失效，请重新登录。"), h("button", { class: "btn", type: "submit" }, "修改口令"));
+  passwords.addEventListener("submit", async e => { e.preventDefault(); try { await api("/api/profile/password", { json: { old_password: old.value, new_password: fresh.value } }); await showLogin(); toast("口令已修改，请重新登录"); } catch (x) { toast(x.message, true); } });
+  app.append(h("div", { class: "page-head" }, h("h1", {}, "账号设置")), profile, passwords);
+}
+
+async function refreshChatHistory() {
+  const target = $("#chat-history");
+  if (!target || !META.user) return;
+  try {
+    const items = await api("/api/conversations");
+    target.replaceChildren(...(items.length ? items.slice(0, 20).map(c => h("a", {
+      href: `#/chat/${c.id}`, class: location.hash === `#/chat/${c.id}` ? "history-item active" : "history-item",
+      title: c.title
+    }, c.title)) : [h("div", { class: "history-empty" }, "对话会保存在这里") ]));
+  } catch (e) { if (!e.auth) target.replaceChildren(h("div", { class: "history-empty" }, "无法加载对话")); }
+}
+
+async function pageChat(app) {
+  const match = location.hash.match(/^#\/chat\/(\d+)/);
+  let id = match ? +match[1] : null;
+  const convo = id ? await api(`/api/conversations/${id}`) : null;
+  const [personalMemories, projectMemories] = await Promise.all([api('/api/memories'), api('/api/project-memories')]);
+  let modelList, modelError;
+  try { modelList = await api('/api/chat-models'); }
+  catch (e) { if (e.auth) throw e; modelError = e.message; modelList = {models: [], default: null}; }
+  const stage = h("div", { class: "chat-stage" });
+  const toolbar = h("div", { class: "chat-toolbar" },
+    h("div", {}, h("div", { class: "chat-heading" }, convo ? convo.title : "新对话"),
+      h("div", { class: "chat-subheading" }, "Parleywise 助手")), h("div", { class: "spacer" }));
+  if (convo) {
+    toolbar.append(h('a', {class: 'btn ghost', href: `#/calls?conversation_id=${id}`}, '模型调用'));
+    toolbar.append(h("button", { class: "btn ghost", type: "button", onclick: async e => {
+      e.currentTarget.disabled = true; e.currentTarget.textContent = "压缩中…";
+      try { const result = await api(`/api/conversations/${id}/compress`, { json: {} }); const left = result.messages.filter(m => m.id > result.summary_through).length; toast(left ? `已压缩一部分，还剩 ${left} 条可继续压缩` : "会话已压缩，原始消息仍保留"); await route(); }
+      catch (x) { toast(x.message, true); e.currentTarget.disabled = false; e.currentTarget.textContent = "压缩会话"; }
+    } }, "压缩会话"), h("button", { class: "btn ghost", type: "button", onclick: async () => {
+      if (!confirm("删除这段会话、原始消息及会话摘要？个人和项目记忆不会删除。")) return;
+      try { await api(`/api/conversations/${id}`, { method: "DELETE" }); location.hash = "#/chat"; refreshChatHistory(); }
+      catch (x) { toast(x.message, true); }
+    } }, "删除"));
+  }
+  const thread = h("div", { class: "chat-thread", "aria-live": "polite" });
+  if (!convo || !convo.messages.length) {
+    thread.append(h("div", { class: "chat-welcome" }, h("div", { class: "welcome-logo", "aria-hidden": "true" }, "P"),
+      h("div", { class: "welcome-eyebrow" }, "YOUR AI WORKSPACE"),
+      h("h1", {}, `你好，${META.user.name}`), h("p", {}, "从一个问题开始，或选择一个工作任务。"),
+      h("div", { class: "starter-grid" },
+        h("a", { class: "starter-card", href: "#/new" }, h("span", { class: "starter-icon", "aria-hidden": "true" }, "↗"), h("b", {}, "审查营销材料"), h("span", {}, "提交材料并逐条复核 AI 意见")),
+        h("a", { class: "starter-card", href: "#/documents" }, h("span", { class: "starter-icon", "aria-hidden": "true" }, "▤"), h("b", {}, "查看审查记录"), h("span", {}, "继续处理或回顾已有材料")))));
+  } else {
+    if (convo.summary) {
+      const covered = convo.messages.filter(m => m.id <= convo.summary_through).length;
+      const editSummary = () => {
+        const value = h('textarea', { class: 'input', rows: 8, maxlength: 6000, 'aria-label': '会话摘要' }); value.value = convo.summary;
+        openModal('编辑会话摘要', [h('p', { class: 'muted' }, `摘要覆盖前 ${covered} 条消息。修改摘要不会改变原始消息。`), value], '保存', async () => {
+          await api(`/api/conversations/${id}/summary`, { method: 'PATCH', json: { summary: value.value, expected_summary: convo.summary, expected_through: convo.summary_through } }); await route(); toast('摘要已更新');
+        });
+      };
+      thread.append(h("details", { class: "chat-summary" }, h("summary", {}, `会话摘要 · 覆盖前 ${covered} 条消息`), h("p", {}, convo.summary), h('p', {class:'small muted'}, '原始消息仍在下方。后续请求使用摘要及之后的消息。'), h('button', {class:'btn', type:'button', onclick:editSummary}, '编辑摘要')));
+    }
+    for (const m of convo.messages) thread.append(h("article", { class: `chat-message ${m.role === "user" ? "is-user" : "is-assistant"}` },
+      h("div", { class: "message-avatar", "aria-hidden": "true" }, m.role === "user" ? "你" : "P"),
+      h("div", { class: "message-content" }, h("div", { class: "message-author" }, m.role === "user" ? "你" : "Parleywise"), h("div", { class: "message-text" }, m.content))));
+  }
+  const input = h("textarea", { rows: 2, maxlength: 8000, "aria-label": "输入消息", placeholder: "向 Parleywise 提问…" });
+  const modelKey = () => `${META.user.id}:${id || 'new'}`;
+  const models = modelList.models;
+  const modelPicker = h('select', {class:'chat-model-picker', 'aria-label':'选择本次发送的模型'},
+    ...(models.length ? [h('option', {value:'', disabled:true}, '请选择模型'), ...models.map(m => h('option', {value:m.id}, m.name))] : [h('option', {value:''}, '无可用模型')]));
+  modelPicker.value = '';
+  const savedModel = chatModelChoices.get(modelKey());
+  if (models.some(m => m.id === savedModel)) modelPicker.value = savedModel;
+  else if (modelList.default) modelPicker.value = modelList.default;
+  modelPicker.disabled = !models.length;
+  modelPicker.addEventListener('change', () => chatModelChoices.set(modelKey(), modelPicker.value));
+  const personalInputs = personalMemories.map(m => [m, h('input', {type:'checkbox', 'aria-label':`个人记忆：${m.content}`})]);
+  const projectInputs = projectMemories.map(m => [m, h('input', {type:'checkbox', 'aria-label':`项目记忆：${m.content}`})]);
+  const pickerLabel = h('summary', {}, '选择本次使用的记忆');
+  for (const [, checkbox] of [...personalInputs, ...projectInputs]) checkbox.addEventListener('change', () => {
+    const count = [...personalInputs, ...projectInputs].filter(([, c]) => c.checked).length;
+    pickerLabel.textContent = count ? `本次已选 ${count} 条记忆` : '选择本次使用的记忆';
+  });
+  const memoryPicker = h('details', {class:'memory-picker'}, pickerLabel,
+    h('div', {class:'memory-picker-body'}, h('p', {class:'small muted'}, '默认不使用。勾选的条目仅用于本次发送，并会发送至模型网关。'),
+      ...[['个人记忆', personalInputs], ['项目记忆 · 工作区共享', projectInputs]].map(([label, entries]) => h('div', {class:'memory-picker-group'}, h('b', {}, label),
+        ...(entries.length ? entries.map(([m, checkbox]) => h('label', {class:'memory-option'}, checkbox, h('span', {}, m.content))) : [h('p', {class:'small muted'}, '暂无记忆')]))),
+      h('a', {href:'#/memory'}, '管理记忆')));
+  const send = h("button", { class: "send-button", type: "submit" }, "发送", h("span", { "aria-hidden": "true" }, "↑"));
+  send.disabled = !modelPicker.value;
+  const status = h("span", { class: "composer-status", role: "status" }, modelError || (!models.length ? '网关未返回可用模型' : !modelPicker.value ? '请选择模型' : ''));
+  modelPicker.addEventListener('change', () => { send.disabled = !modelPicker.value; status.textContent = ''; });
+  const retryModels = !models.length ? h('button', {class:'btn ghost', type:'button', onclick:() => route()}, '重试') : null;
+  const form = h("form", { class: "composer" }, input,
+    h("div", { class: "composer-footer" }, modelPicker, memoryPicker, status, retryModels, h("div", { class: "spacer" }), send));
+  input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); } });
+  form.addEventListener("submit", async e => {
+    e.preventDefault(); const content = input.value.trim(); if (!content) return;
+    const origin = location.hash || "#/chat";
+    send.disabled = true; input.disabled = true; modelPicker.disabled = true; status.textContent = "正在思考…";
+    try {
+      if (!id) { const created = await api("/api/conversations", { json: { title: content.slice(0, 32) } }); id = created.id; }
+      chatModelChoices.set(modelKey(), modelPicker.value);
+      await api(`/api/conversations/${id}/messages`, { json: { content, model: modelPicker.value, memory_ids: personalInputs.filter(([, c]) => c.checked).map(([m]) => m.id), project_memory_ids: projectInputs.filter(([, c]) => c.checked).map(([m]) => m.id) } });
+      await refreshChatHistory();
+      if ((location.hash || "#/chat") !== origin) return;
+      if (!match) location.hash = `#/chat/${id}`; else await route();
+    } catch (x) { status.textContent = "发送失败，请重试"; toast(x.message, true); send.disabled = false; input.disabled = false; modelPicker.disabled = false; }
+  });
+  const composerArea = h("div", { class: "composer-area" }, form,
+    h("p", { class: "composer-note" }, "消息会发送至已配置的模型网关。AI 内容请结合原文和专业判断核实。"));
+  stage.append(toolbar, thread, composerArea); app.append(stage);
+  if (convo && convo.messages.length) thread.scrollTop = thread.scrollHeight;
+  refreshChatHistory();
+}
+
+async function pageMemories(app) {
+  const [personal, project] = await Promise.all([api('/api/memories'), api('/api/project-memories')]);
+  const section = (title, description, rows, endpoint, editable) => {
+    const entry = h('textarea', {class:'input', rows:2, maxlength:1000, 'aria-label':`添加${title}`, placeholder:'输入一条记忆…'});
+    const add = h('form', {class:'memory-add'}, entry, h('button', {class:'btn primary', type:'submit'}, '添加'));
+    add.addEventListener('submit', async e => { e.preventDefault(); try { await api(endpoint, {json:{content:entry.value}}); await route(); } catch (x) { toast(x.message, true); } });
+    const entries = rows.map(m => {
+      const edit = () => {
+        const value = h('textarea', {class:'input', rows:5, maxlength:1000, 'aria-label':`编辑${title}`}); value.value = m.content;
+        openModal(`编辑${title}`, [value], '保存', async () => { await api(`${endpoint}/${m.id}`, {method:'PATCH', json:{content:value.value}}); await route(); toast('已保存'); });
+      };
+      return h('div', {class:'memory-row'}, h('div', {class:'memory-content'}, h('div', {}, m.content),
+        h('div', {class:'small muted'}, m.author ? `添加人：${m.author} · ${fmtTime(m.created_at)}` : `手动添加 · ${fmtTime(m.created_at)}`)),
+        editable ? h('div', {class:'row'}, h('button', {class:'btn ghost', type:'button', onclick:edit}, '编辑'),
+          h('button', {class:'btn ghost', type:'button', onclick:async () => { if (!confirm(`删除这条${title}？`)) return; try { await api(`${endpoint}/${m.id}`, {method:'DELETE'}); await route(); } catch (x) { toast(x.message, true); } }}, '删除')) : null);
+    });
+    return h('section', {class:'panel memory-section'}, h('h2', {}, title), h('p', {class:'muted'}, description),
+      ...(entries.length ? entries : [h('p', {class:'muted'}, '还没有记忆')]), editable ? add : h('p', {class:'small muted'}, '仅管理员可添加或修改项目记忆。'));
+  };
+  app.append(h('div', {class:'page-head'}, h('h1', {}, '记忆管理')),
+    h('p', {class:'muted'}, '记忆不会自动发送；每次对话可选择需要使用的条目。不要保存密钥。'),
+    section('个人记忆', '仅你可见，适合保存稳定偏好。', personal, '/api/memories', true),
+    section('项目记忆', '此工作区的所有用户可见，由管理员维护。当前部署对应一个共享工作区。', project, '/api/project-memories', META.user.role === 'admin'));
+}
+
+async function pageMcp(app) {
+  const rows = await api("/api/mcp-servers");
+  const name = h("input", { class: "input", required: true, maxlength: 80, placeholder: "服务名称" });
+  const url = h("input", { class: "input", required: true, type: "url", placeholder: "https://example.com/mcp" });
+  const form = h("form", { class: "panel section" }, h("h2", {}, "添加 MCP 地址"),
+    h("p", { class: "small muted" }, "当前仅保存地址，尚不连接服务、发现或调用工具。请勿在地址中填写密钥或查询参数。"),
+    h("label", { class: "field" }, h("span", {}, "名称"), name), h("label", { class: "field" }, h("span", {}, "地址"), url), h("button", { class: "btn primary", type: "submit" }, "保存"));
+  form.addEventListener("submit", async e => { e.preventDefault(); try { await api("/api/mcp-servers", { json: { name: name.value, url: url.value } }); await route(); } catch (x) { toast(x.message, true); } });
+  app.append(h("div", { class: "page-head" }, h("h1", {}, "MCP 配置")), form,
+    h("div", { class: "panel section" }, h("h2", {}, "已保存的服务"), ...(rows.length ? rows.map(m => h("div", { class: "row", style: "margin:10px 0" }, h("span", {}, `${m.name} · ${m.url} · 未连接`), h("div", { class: "spacer" }), h("button", { class: "btn ghost", onclick: async () => { try { await api(`/api/mcp-servers/${m.id}`, { method: "DELETE" }); await route(); } catch (x) { toast(x.message, true); } } }, "删除"))) : [h("p", { class: "muted" }, "尚未配置")])));
+}
+
+async function pageAdminModels(app) {
+  if (META.user.role !== 'admin') { app.append(h('p', {}, '仅管理员可管理模型。')); return; }
+  const config = await api('/api/admin/chat-models');
+  const available = new Set(config.models.map(m => m.id));
+  const missing = config.allowed.filter(id => !available.has(id));
+  const search = h('input', {class:'input', type:'search', placeholder:'搜索网关模型', 'aria-label':'搜索网关模型'});
+  const selection = new Set(config.allowed.filter(id => available.has(id)));
+  const defaultPicker = h('select', {class:'input', 'aria-label':'默认聊天模型'});
+  const list = h('div', {class:'model-admin-list'});
+  const count = h('p', {class:'small muted'});
+  function renderDefault() {
+    const previous = defaultPicker.value || config.default;
+    defaultPicker.replaceChildren(...Array.from(selection, id => h('option', {value:id}, id)));
+    if (selection.has(previous)) defaultPicker.value = previous;
+    count.textContent = `已选 ${selection.size} 个模型`;
+  }
+  function renderList() {
+    const query = search.value.trim().toLowerCase();
+    const matches = config.models.filter(m => m.id.toLowerCase().includes(query));
+    list.replaceChildren(...matches.map(m => {
+      const checkbox = h('input', {type:'checkbox'}); checkbox.checked = selection.has(m.id);
+      checkbox.addEventListener('change', () => { if (checkbox.checked) selection.add(m.id); else selection.delete(m.id); renderDefault(); });
+      return h('label', {class:'model-admin-option'}, checkbox, h('span', {}, m.id));
+    }));
+    if (!matches.length) list.append(h('p', {class:'muted'}, '没有匹配的模型'));
+  }
+  search.addEventListener('input', renderList);
+  renderDefault(); renderList();
+  const save = h('button', {class:'btn primary', type:'submit'}, '保存模型范围');
+  const form = h('form', {class:'panel section model-admin'},
+    h('p', {class:'muted'}, '勾选用户可在聊天中使用的模型，并设置默认模型。保存后立即生效。'),
+    missing.length ? h('p', {class:'small'}, `以下已配置模型当前不在网关列表中，保存后将移除：${missing.join('、')}`) : null,
+    search, count, list, h('label', {class:'field'}, h('span', {}, '默认模型'), defaultPicker), save);
+  form.addEventListener('submit', async e => {
+    e.preventDefault(); save.disabled = true;
+    try { await api('/api/admin/chat-models', {method:'PUT', json:{allowed:Array.from(selection), default:defaultPicker.value}}); toast('模型范围已保存'); }
+    catch (x) { toast(x.message, true); }
+    finally { save.disabled = false; }
+  });
+  app.append(h('div', {class:'page-head'}, h('h1', {}, '模型管理')), form);
 }
 
 async function start() {
   META = await api("/api/meta");
   $("#topnav").hidden = false;
+  $("#admin-models-nav").hidden = META.user.role !== 'admin';
   $("#whoami").textContent = `${META.user.name}${META.user.role === "admin" ? "（管理员）" : ""}`;
+  refreshChatHistory();
   route();
 }
 

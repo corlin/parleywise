@@ -3,22 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Parleywise · 合规初审</title>
+<title>Parleywise · AI 工作台</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header class="topnav" id="topnav" hidden>
-  <a class="brand" href="#/"><span class="logo">P</span><span class="brand-text">Parleywise</span><span class="brand-sub">合规初审</span></a>
-  <nav>
-    <a href="#/" data-nav="list">材料</a>
-    <a href="#/metrics" data-nav="metrics">度量</a>
+<aside class="topnav" id="topnav" hidden>
+  <a class="brand" href="#/chat"><span class="logo">P</span><span class="brand-text">Parleywise</span></a>
+  <a class="new-chat" href="#/chat"><span aria-hidden="true">＋</span> 新对话</a>
+  <div class="side-label">工作区</div>
+  <nav aria-label="工作区导航">
+    <a href="#/chat" data-nav="chat"><span class="nav-mark" aria-hidden="true">◈</span>对话</a>
+    <a href="#/documents" data-nav="list"><span class="nav-mark" aria-hidden="true">▤</span>合规审查</a>
+    <a href="#/metrics" data-nav="metrics"><span class="nav-mark" aria-hidden="true">◫</span>审查度量</a>
+    <a href="#/calls" data-nav="calls"><span class="nav-mark" aria-hidden="true">≡</span>模型调用</a>
   </nav>
-  <div class="spacer"></div>
-  <span class="whoami" id="whoami"></span>
-  <button class="btn ghost sm" id="logout">退出</button>
-</header>
+  <div class="side-label side-history-label">最近对话</div>
+  <div class="side-history" id="chat-history"></div>
+  <div class="side-bottom">
+    <nav aria-label="设置">
+      <a href="#/memory" data-nav="memory"><span class="nav-mark" aria-hidden="true">◇</span>记忆管理</a>
+      <a href="#/mcp" data-nav="mcp"><span class="nav-mark" aria-hidden="true">⌘</span>MCP 配置</a>
+      <a href="#/models" data-nav="models" id="admin-models-nav" hidden><span class="nav-mark" aria-hidden="true">◉</span>模型管理</a>
+      <a href="#/profile" data-nav="profile"><span class="nav-mark" aria-hidden="true">○</span>个人资料</a>
+    </nav>
+    <div class="account"><span class="avatar" aria-hidden="true">P</span><span class="whoami" id="whoami"></span><button class="btn ghost sm" id="logout">退出</button></div>
+  </div>
+</aside>
 <main id="app"></main>
-<div id="toast" class="toast" hidden></div>
+<div id="toast" class="toast" role="status" hidden></div>
 <script src="/static/app.js"></script>
 </body>
 </html>
