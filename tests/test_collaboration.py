@@ -44,5 +44,39 @@ class CollaborationTraceTests(unittest.TestCase):
         self.assertEqual(kept[0]['rule_id'], 'R01')
 
 
+class KeywordReviewTests(unittest.TestCase):
+    def test_keyword_hits_go_through_strong_review_when_online(self):
+        class RejectAllReviewLLM:
+            def __init__(self):
+                self.review_inputs = []
+
+            def chat(self, model, system, user):
+                if system == review.REVIEW_SYS:
+                    self.review_inputs.append(user)
+                    return []
+                return []
+
+        rules = {
+            'R19': {
+                'id': 'R19',
+                'title': '使投资者忽视风险的用语',
+                'description': '不得使用安全等表述',
+                'check': 'keyword',
+                'keywords': ['安全'],
+                'applies_to': 'public',
+            }
+        }
+        text = '任何宣称“安全”的说法均不符合监管规定。'
+        llm = RejectAllReviewLLM()
+        kept, dropped = review.review_doc(text, 'public', rules, llm, 'cheap', 'strong')
+        self.assertEqual(kept, [])
+        self.assertEqual(len(llm.review_inputs), 1)
+        self.assertIn('R19', llm.review_inputs[0])
+        self.assertEqual([d['rule_id'] for d in dropped], ['R19'])
+
+        kept_offline, _ = review.review_doc(text, 'public', rules, None)
+        self.assertEqual([f['rule_id'] for f in kept_offline], ['R19'])
+
+
 if __name__ == '__main__':
     unittest.main()

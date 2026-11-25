@@ -60,6 +60,8 @@ def llm_review(text, rules, hints, llm, cheap, strong, collaboration=False, on_c
         triage = first_findings + second_findings
     else:
         triage = llm.chat(cheap, TRIAGE_SYS, user)
+    keyword_findings = [h for h in hints if rules[h["rule_id"]]["check"] == "keyword"]
+    triage = triage + keyword_findings
     if not triage:
         return [], []
     user2 = (f"【今天日期】{today()}\n\n【规则】\n{rules_block(rules)}\n\n【材料】\n{text}\n\n【初审意见】\n"
@@ -103,12 +105,12 @@ def review_doc(text, doc_type, all_rules, llm=None, cheap="cheap", strong="stron
     rules = applicable(all_rules, doc_type)
     stage("keyword")
     hints = keyword_scan(text, rules)
-    findings = [h for h in hints if rules[h["rule_id"]]["check"] == "keyword"]
-    rejected = []
-    if llm is not None:
-        reviewed, rejected = llm_review(text, rules, hints, llm, cheap, strong, collaboration=collaboration,
+    if llm is None:
+        findings = [h for h in hints if rules[h["rule_id"]]["check"] == "keyword"]
+        rejected = []
+    else:
+        findings, rejected = llm_review(text, rules, hints, llm, cheap, strong, collaboration=collaboration,
                                         on_collaboration=on_collaboration)
-        findings += reviewed
     stage("verify")
     kept, dropped = verify(findings, text, rules)
     return kept, dropped + rejected

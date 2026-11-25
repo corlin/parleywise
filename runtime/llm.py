@@ -66,7 +66,7 @@ class LLM:
             started_at, t0 = time.time(), time.monotonic()
             event = {'requested_model': model, 'attempt': attempt + 1, 'started_at': started_at}
             try:
-                with urllib.request.urlopen(req, timeout=120) as resp:
+                with urllib.request.urlopen(req, timeout=240) as resp:
                     payload = json.loads(resp.read())
                     cost = resp.headers.get("x-litellm-response-cost")
                 u = payload.get('usage') or {}
