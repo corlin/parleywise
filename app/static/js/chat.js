@@ -108,86 +108,88 @@ export async function pageChat(app) {
   const savedPersonal = chatMemoryChoices.get(modelKey()) || new Set();
   const savedProject = chatProjectMemoryChoices.get(modelKey()) || new Set();
   const savedMcp = chatMcpChoices.get(modelKey()) || new Set();
-  const personalInputs = personalMemories.map(m => {
-    const cb = h("input", { type: "checkbox", "aria-label": `个人记忆：${m.content}` });
-    cb.checked = savedPersonal.has(m.id);
-    return [m, cb];
-  });
-  const projectInputs = projectMemories.map(m => {
-    const cb = h("input", { type: "checkbox", "aria-label": `项目记忆：${m.content}` });
-    cb.checked = savedProject.has(m.id);
-    return [m, cb];
-  });
-  const pickerLabel = h("summary", {}, "选择本次使用的记忆");
-  let memoryPicker;
-  const syncMem = () => {
-    const pIds = new Set(personalInputs.filter(([, c]) => c.checked).map(([m]) => m.id));
-    const jIds = new Set(projectInputs.filter(([, c]) => c.checked).map(([m]) => m.id));
-    chatMemoryChoices.set(modelKey(), pIds);
-    chatProjectMemoryChoices.set(modelKey(), jIds);
-    const count = pIds.size + jIds.size;
-    pickerLabel.textContent = count ? `已选 ${count} 条记忆` : "选择本次使用的记忆";
-    if (memoryPicker) memoryPicker.classList.toggle("has-selection", count > 0);
+  const makeCheck = (item, label, checked) => {
+    const cb = h("input", { type: "checkbox", "aria-label": label });
+    cb.checked = checked;
+    return [item, cb];
   };
-  for (const [, checkbox] of [...personalInputs, ...projectInputs]) checkbox.addEventListener("change", syncMem);
-  memoryPicker = h("details", { class: "memory-picker" }, pickerLabel,
-    h("div", { class: "memory-picker-body" }, h("p", { class: "small muted" }, "默认不使用。勾选的条目仅用于本会话发送，并会发送至模型网关。"),
-      ...[["个人记忆", personalInputs], ["项目记忆 · 工作区共享", projectInputs]].map(([label, entries]) =>
-        h("div", { class: "memory-picker-group" }, h("b", {}, label),
-          ...(entries.length ? entries.map(([m, checkbox]) => h("label", { class: "memory-option" }, checkbox, h("span", {}, m.content)))
-            : [h("p", { class: "small muted" }, "暂无记忆")]))),
-      h("div", { class: "picker-foot" },
-        h("a", { href: "#/memory" }, "管理记忆"),
-        h("button", {
-          class: "link-btn",
-          type: "button",
-          onclick: () => {
-            for (const [, c] of [...personalInputs, ...projectInputs]) c.checked = false;
-            syncMem();
-          },
-        }, "清空"))));
-  syncMem();
+  const personalInputs = personalMemories.map(m => makeCheck(m, `个人记忆：${m.content}`, savedPersonal.has(m.id)));
+  const projectInputs = projectMemories.map(m => makeCheck(m, `项目记忆：${m.content}`, savedProject.has(m.id)));
+  const mcpInputs = mcpServers.filter(s => s.tools && s.tools.length)
+    .map(s => makeCheck(s, `MCP：${s.name}`, savedMcp.has(s.id)));
 
-  const readyMcp = mcpServers.filter(s => s.tools && s.tools.length);
-  const mcpInputs = readyMcp.map(s => {
-    const cb = h("input", { type: "checkbox", "aria-label": `MCP：${s.name}` });
-    cb.checked = savedMcp.has(s.id);
-    return [s, cb];
+  const allPickers = [];
+  function createPicker({ idleText, activeText, hint, groups, manageHref, manageText, onSync }) {
+    const summary = h("summary", {}, idleText);
+    const allCbs = groups.flatMap(g => g.entries.map(([, cb]) => cb));
+    const details = h("details", { class: "memory-picker" }, summary,
+      h("div", { class: "memory-picker-body" },
+        h("p", { class: "small muted" }, hint),
+        ...groups.map(g => h("div", { class: "memory-picker-group" },
+          g.title ? h("b", {}, g.title) : null,
+          ...(g.entries.length ? g.entries.map(([item, cb]) => h("label", { class: "memory-option" }, cb, g.render(item)))
+            : [h("p", { class: "small muted" }, g.emptyText || "暂无可用项")]))),
+        h("div", { class: "picker-foot" },
+          h("a", { href: manageHref }, manageText),
+          allCbs.length ? h("button", {
+            class: "link-btn",
+            type: "button",
+            onclick: () => { allCbs.forEach(c => (c.checked = false)); sync(); },
+          }, "清空") : null)));
+    const sync = () => {
+      const n = onSync();
+      summary.textContent = n ? activeText(n) : idleText;
+      details.classList.toggle("has-selection", n > 0);
+    };
+    allCbs.forEach(cb => cb.addEventListener("change", sync));
+    details.addEventListener("toggle", () => {
+      if (details.open) allPickers.forEach(p => { if (p !== details) p.open = false; });
+    });
+    allPickers.push(details);
+    sync();
+    return details;
+  }
+
+  const memoryPicker = createPicker({
+    idleText: "选择本次使用的记忆",
+    activeText: n => `已选 ${n} 条记忆`,
+    hint: "默认不使用。勾选的条目仅用于本会话发送，并会发送至模型网关。",
+    manageHref: "#/memory",
+    manageText: "管理记忆",
+    groups: [
+      { title: "个人记忆", entries: personalInputs, emptyText: "暂无记忆", render: m => h("span", {}, m.content) },
+      { title: "项目记忆 · 工作区共享", entries: projectInputs, emptyText: "暂无记忆", render: m => h("span", {}, m.content) },
+    ],
+    onSync: () => {
+      const pIds = new Set(personalInputs.filter(([, c]) => c.checked).map(([m]) => m.id));
+      const jIds = new Set(projectInputs.filter(([, c]) => c.checked).map(([m]) => m.id));
+      chatMemoryChoices.set(modelKey(), pIds);
+      chatProjectMemoryChoices.set(modelKey(), jIds);
+      return pIds.size + jIds.size;
+    },
   });
-  const mcpLabel = h("summary", {}, "选择 MCP 工具");
-  let mcpPicker;
-  const syncMcp = () => {
-    const mIds = new Set(mcpInputs.filter(([, c]) => c.checked).map(([s]) => s.id));
-    chatMcpChoices.set(modelKey(), mIds);
-    mcpLabel.textContent = mIds.size ? `已选 ${mIds.size} 个 MCP` : "选择 MCP 工具";
-    if (mcpPicker) mcpPicker.classList.toggle("has-selection", mIds.size > 0);
-  };
-  for (const [, checkbox] of mcpInputs) checkbox.addEventListener("change", syncMcp);
-  mcpPicker = h("details", { class: "memory-picker" }, mcpLabel,
-    h("div", { class: "memory-picker-body" },
-      h("p", { class: "small muted" }, "仅显示已完成工具发现的服务。勾选后模型可在本轮按需调用只读工具。"),
-      ...(mcpInputs.length ? mcpInputs.map(([s, checkbox]) =>
-        h("label", { class: "memory-option" }, checkbox,
-          h("div", {}, h("div", {}, `${s.name}（${s.tools.length} 个工具）`),
-            h("div", { class: "small faint" }, s.tools.map(t => t.name).join(" · ")))))
-        : [h("p", { class: "small muted" }, "暂无可用工具，请先到 MCP 配置页测试连接")]),
-      h("div", { class: "picker-foot" },
-        h("a", { href: "#/mcp" }, "配置 MCP"),
-        mcpInputs.length ? h("button", {
-          class: "link-btn",
-          type: "button",
-          onclick: () => {
-            for (const [, c] of mcpInputs) c.checked = false;
-            syncMcp();
-          },
-        }, "清空") : null)));
-  syncMcp();
 
-  // 弹层互斥 + 点击外部或按 Esc 自动关闭
-  memoryPicker.addEventListener("toggle", () => { if (memoryPicker.open) mcpPicker.open = false; });
-  mcpPicker.addEventListener("toggle", () => { if (mcpPicker.open) memoryPicker.open = false; });
-  const closePickers = () => { memoryPicker.open = false; mcpPicker.open = false; };
-  const onDocClick = e => { if (!memoryPicker.contains(e.target) && !mcpPicker.contains(e.target)) closePickers(); };
+  const mcpPicker = createPicker({
+    idleText: "选择 MCP 工具",
+    activeText: n => `已选 ${n} 个 MCP`,
+    hint: "仅显示已完成工具发现的服务。勾选后模型可在本轮按需调用只读工具。",
+    manageHref: "#/mcp",
+    manageText: "配置 MCP",
+    groups: [{
+      entries: mcpInputs,
+      emptyText: "暂无可用工具，请先到 MCP 配置页测试连接",
+      render: s => h("div", {}, h("div", {}, `${s.name}（${s.tools.length} 个工具）`),
+        h("div", { class: "small faint" }, s.tools.map(t => t.name).join(" · "))),
+    }],
+    onSync: () => {
+      const mIds = new Set(mcpInputs.filter(([, c]) => c.checked).map(([s]) => s.id));
+      chatMcpChoices.set(modelKey(), mIds);
+      return mIds.size;
+    },
+  });
+
+  const closePickers = () => allPickers.forEach(p => (p.open = false));
+  const onDocClick = e => { if (!allPickers.some(p => p.contains(e.target))) closePickers(); };
   const onDocKey = e => { if (e.key === "Escape") closePickers(); };
   document.addEventListener("mousedown", onDocClick);
   document.addEventListener("keydown", onDocKey);
@@ -207,8 +209,16 @@ export async function pageChat(app) {
     e.preventDefault();
     const content = input.value.trim();
     if (!content) return;
+    closePickers();
     const origin = location.hash || "#/chat";
     send.disabled = true; input.disabled = true; modelPicker.disabled = true; status.textContent = "正在思考…";
+    const welcome = thread.querySelector(".chat-welcome");
+    if (welcome) welcome.hidden = true;
+    const pendingMsg = h("article", { class: "chat-message is-user" },
+      h("div", { class: "message-avatar", "aria-hidden": "true" }, "你"),
+      h("div", { class: "message-content" }, h("div", { class: "message-author" }, "你"), h("div", { class: "message-text" }, content)));
+    thread.append(pendingMsg);
+    thread.scrollTop = thread.scrollHeight;
     try {
       if (!id) {
         const oldKey = modelKey();
@@ -233,9 +243,12 @@ export async function pageChat(app) {
       if ((location.hash || "#/chat") !== origin) return;
       if (!match) location.hash = `#/chat/${id}`; else await triggerRoute();
     } catch (x) {
+      pendingMsg.remove();
+      if (welcome) welcome.hidden = false;
       status.textContent = "发送失败，请重试";
       toast(x.message, true);
       send.disabled = false; input.disabled = false; modelPicker.disabled = false;
+      input.focus();
     }
   });
   const composerArea = h("div", { class: "composer-area" }, form,
@@ -243,6 +256,7 @@ export async function pageChat(app) {
   stage.append(toolbar, thread, composerArea);
   app.append(stage);
   if (convo && convo.messages.length) thread.scrollTop = thread.scrollHeight;
+  if (window.innerWidth > 720) input.focus();
   refreshChatHistory();
 }
 

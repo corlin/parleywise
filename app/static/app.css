@@ -271,7 +271,6 @@ body:has(.chat-stage) main { height: 100dvh; padding: 0; }
 .model-admin-list { max-height: 380px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin: 10px 0 18px; }
 .model-admin-option { display: flex; gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .model-admin-option:last-child { border-bottom: 0; }
-.memory-choice { display: flex; align-items: center; gap: 6px; color: #687e85; font-size: 12px; cursor: pointer; }
 .composer-status { color: #67808a; font-size: 12px; }
 .send-button { display: inline-flex; align-items: center; gap: 9px; border: 0; border-radius: 8px; padding: 8px 12px; min-height: 38px; background: #284b62; color: #fff; cursor: pointer; }
 .send-button:hover { background: #345d76; }
@@ -295,6 +294,7 @@ body:has(.chat-stage) main { height: 100dvh; padding: 0; }
   .chat-thread { padding: 24px 18px; }
   .chat-welcome { padding-bottom: 10px; }
   .composer-area { padding: 8px 14px max(10px, env(safe-area-inset-bottom)); }
+  .memory-picker-body { position: fixed; left: 14px; right: 14px; bottom: 76px; width: auto; max-height: 50vh; }
   .starter-grid { grid-template-columns: 1fr; }
   .starter-card { min-height: 96px; }
   .rv-bar { top: 57px; }
@@ -303,6 +303,9 @@ body:has(.chat-stage) main { height: 100dvh; padding: 0; }
 /* 记忆选择与管理 */
 .memory-picker { position: relative; color: #536d76; font-size: 12px; }
 .memory-picker > summary { cursor: pointer; padding: 5px 9px; border: 1px solid transparent; border-radius: 7px; list-style: none; user-select: none; }
+.memory-picker > summary::-webkit-details-marker { display: none; }
+.memory-picker > summary::before { content: "▸ "; font-size: 10px; opacity: .7; }
+.memory-picker[open] > summary::before { content: "▾ "; }
 .memory-picker > summary:hover { background: #f3f7f8; }
 .memory-picker.has-selection > summary { border-color: #b7ced5; background: #eef6f8; color: #244b5a; font-weight: 500; }
 .memory-picker-body { position: absolute; z-index: 25; bottom: calc(100% + 10px); left: 0; width: min(380px, calc(100vw - 40px)); max-height: 45vh; overflow: auto; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: 0 10px 30px rgba(20,40,50,.15); }
