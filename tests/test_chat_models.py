@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app import conversations, db as store, main, model_calls
+from app import conversations, db as store, deps, main, model_calls
 
 
 class Request:
@@ -55,8 +55,8 @@ class ChatModelsTests(unittest.TestCase):
                 con.execute("INSERT INTO users(username,display_name,pw_hash,created_at) VALUES ('u','U','',0)")
             cid = conversations.create(1, 'Test')
             models = [{'id': 'default', 'name': 'Default'}, {'id': 'chosen', 'name': 'Chosen'}]
-            with patch.object(main, 'available_chat_models', return_value={'models': models, 'default': 'default'}), \
-                    patch.object(main, 'me', return_value={'id': 1}), \
+            with patch.object(deps, 'available_chat_models', return_value={'models': models, 'default': 'default'}), \
+                    patch.object(deps, 'me', return_value={'id': 1}), \
                     patch.dict('os.environ', {'LITELLM_API_KEY': 'test-key'}), \
                     patch('urllib.request.urlopen', return_value=Response()) as urlopen:
                 result = asyncio.run(main.send_conversation_message(cid, Request({'content': 'question', 'model': 'chosen'})))
@@ -76,19 +76,19 @@ class ChatModelsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(store, 'DB_PATH', Path(tmp) / 'test.db'):
             store.init()
             request = Request({'allowed': ['two'], 'default': 'two'})
-            with patch.object(main, 'gateway_chat_models', return_value=models), \
-                    patch.object(main, 'me', return_value={'role': 'reviewer'}):
+            with patch.object(deps, 'gateway_chat_models', return_value=models), \
+                    patch.object(deps, 'me', return_value={'role': 'reviewer'}):
                 with self.assertRaises(HTTPException) as error:
                     asyncio.run(main.update_admin_chat_models(request))
                 self.assertEqual(error.exception.status_code, 403)
-            with patch.object(main, 'gateway_chat_models', return_value=models), \
-                    patch.object(main, 'me', return_value={'role': 'admin'}):
+            with patch.object(deps, 'gateway_chat_models', return_value=models), \
+                    patch.object(deps, 'me', return_value={'role': 'admin'}):
                 asyncio.run(main.update_admin_chat_models(request))
                 self.assertEqual(main.available_chat_models(), {'models': [models[1]], 'default': 'two'})
                 with self.assertRaises(HTTPException):
                     asyncio.run(main.update_admin_chat_models(Request({'allowed': ['outside'], 'default': 'outside'})))
                 self.assertEqual(main.chat_model_settings()['allowed'], ['two'])
-                with patch.object(main, 'gateway_chat_models', return_value=[models[0]]):
+                with patch.object(deps, 'gateway_chat_models', return_value=[models[0]]):
                     self.assertEqual(main.available_chat_models(), {'models': [], 'default': None})
 
 
