@@ -19,7 +19,11 @@ export async function pageChat(app) {
   const match = location.hash.match(/^#\/chat\/(\d+)/);
   let id = match ? +match[1] : null;
   const convo = id ? await api(`/api/conversations/${id}`) : null;
-  const [personalMemories, projectMemories] = await Promise.all([api("/api/memories"), api("/api/project-memories")]);
+  const [personalMemories, projectMemories, mcpServers] = await Promise.all([
+    api("/api/memories"),
+    api("/api/project-memories"),
+    api("/api/mcp-servers"),
+  ]);
   let modelList, modelError;
   try { modelList = await api("/api/chat-models"); }
   catch (e) { if (e.auth) throw e; modelError = e.message; modelList = { models: [], default: null }; }
@@ -101,13 +105,27 @@ export async function pageChat(app) {
           ...(entries.length ? entries.map(([m, checkbox]) => h("label", { class: "memory-option" }, checkbox, h("span", {}, m.content)))
             : [h("p", { class: "small muted" }, "暂无记忆")]))),
       h("a", { href: "#/memory" }, "管理记忆")));
+  const readyMcp = mcpServers.filter(s => s.tools && s.tools.length);
+  const mcpInputs = readyMcp.map(s => [s, h("input", { type: "checkbox", "aria-label": `MCP：${s.name}` })]);
+  const mcpLabel = h("summary", {}, "选择 MCP 工具");
+  for (const [, checkbox] of mcpInputs) checkbox.addEventListener("change", () => {
+    const count = mcpInputs.filter(([, c]) => c.checked).length;
+    mcpLabel.textContent = count ? `已选 ${count} 个 MCP` : "选择 MCP 工具";
+  });
+  const mcpPicker = h("details", { class: "memory-picker" }, mcpLabel,
+    h("div", { class: "memory-picker-body" },
+      h("p", { class: "small muted" }, "仅显示已完成工具发现的服务。勾选后模型可在本轮按需调用只读工具。"),
+      ...(mcpInputs.length ? mcpInputs.map(([s, checkbox]) =>
+        h("label", { class: "memory-option" }, checkbox, h("span", {}, `${s.name}（${s.tools.length} 个工具）`)))
+        : [h("p", { class: "small muted" }, "暂无可用工具，请先到 MCP 配置页测试连接")]),
+      h("a", { href: "#/mcp" }, "配置 MCP")));
   const send = h("button", { class: "send-button", type: "submit" }, "发送", h("span", { "aria-hidden": "true" }, "↑"));
   send.disabled = !modelPicker.value;
   const status = h("span", { class: "composer-status", role: "status" }, modelError || (!models.length ? "网关未返回可用模型" : !modelPicker.value ? "请选择模型" : ""));
   modelPicker.addEventListener("change", () => { send.disabled = !modelPicker.value; status.textContent = ""; });
   const retryModels = !models.length ? h("button", { class: "btn ghost", type: "button", onclick: () => triggerRoute() }, "重试") : null;
   const form = h("form", { class: "composer" }, input,
-    h("div", { class: "composer-footer" }, modelPicker, memoryPicker, status, retryModels, h("div", { class: "spacer" }), send));
+    h("div", { class: "composer-footer" }, modelPicker, memoryPicker, mcpPicker, status, retryModels, h("div", { class: "spacer" }), send));
   input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); } });
   form.addEventListener("submit", async e => {
     e.preventDefault();
@@ -124,6 +142,7 @@ export async function pageChat(app) {
           model: modelPicker.value,
           memory_ids: personalInputs.filter(([, c]) => c.checked).map(([m]) => m.id),
           project_memory_ids: projectInputs.filter(([, c]) => c.checked).map(([m]) => m.id),
+          mcp_server_ids: mcpInputs.filter(([, c]) => c.checked).map(([s]) => s.id),
         },
       });
       await refreshChatHistory();
@@ -184,24 +203,91 @@ export async function pageMemories(app) {
 
 export async function pageMcp(app) {
   const rows = await api("/api/mcp-servers");
+  const isAdmin = META.user.role === "admin";
   const name = h("input", { class: "input", required: true, maxlength: 80, placeholder: "服务名称" });
   const url = h("input", { class: "input", required: true, type: "url", placeholder: "https://example.com/mcp" });
-  const form = h("form", { class: "panel section" }, h("h2", {}, "添加 MCP 地址"),
-    h("p", { class: "small muted" }, "当前仅保存地址，尚不连接服务、发现或调用工具。请勿在地址中填写密钥或查询参数。"),
+  const form = h("form", { class: "panel section" }, h("h2", {}, "添加 HTTP MCP 服务"),
+    h("p", { class: "small muted" }, "支持无状态 Streamable HTTP MCP。请勿在地址中填写密钥或查询参数。"),
     h("label", { class: "field" }, h("span", {}, "名称"), name),
     h("label", { class: "field" }, h("span", {}, "地址"), url),
     h("button", { class: "btn primary", type: "submit" }, "保存"));
   form.addEventListener("submit", async e => {
     e.preventDefault();
-    try { await api("/api/mcp-servers", { json: { name: name.value, url: url.value } }); await triggerRoute(); }
+    try { await api("/api/mcp-servers", { json: { name: name.value, url: url.value, transport: "http" } }); await triggerRoute(); }
     catch (x) { toast(x.message, true); }
   });
-  app.append(h("div", { class: "page-head" }, h("h1", {}, "MCP 配置")), form,
+
+  let stdioForm = null;
+  if (isAdmin) {
+    const sName = h("input", { class: "input", required: true, maxlength: 80, placeholder: "本地工具服务名" });
+    const cmd = h("input", { class: "input", required: true, placeholder: "如 python3" });
+    const args = h("input", { class: "input", placeholder: "空格分隔参数，如 tools/compliance_mcp.py" });
+    stdioForm = h("form", { class: "panel section" },
+      h("div", { class: "row", style: "justify-content:space-between;margin-bottom:8px" },
+        h("h2", { style: "margin:0" }, "添加本地 stdio MCP（仅管理员）"),
+        h("button", {
+          class: "btn sm",
+          type: "button",
+          onclick: async e => {
+            e.currentTarget.disabled = true;
+            try {
+              const r = await api("/api/mcp-servers/preset-compliance", { json: {} });
+              toast(`已添加合规规则 MCP（发现 ${r.tools.length} 个工具）`);
+              await triggerRoute();
+            } catch (x) { toast(x.message, true); e.currentTarget.disabled = false; }
+          },
+        }, "＋ 一键添加本地合规规则 MCP")),
+      h("p", { class: "small muted" }, "stdio 服务由工作区共享，添加后所有登录用户可在对话中勾选调用。"),
+      h("label", { class: "field" }, h("span", {}, "名称"), sName),
+      h("label", { class: "field" }, h("span", {}, "命令"), cmd),
+      h("label", { class: "field" }, h("span", {}, "参数"), args),
+      h("button", { class: "btn primary", type: "submit" }, "保存 stdio 服务"));
+    stdioForm.addEventListener("submit", async e => {
+      e.preventDefault();
+      try {
+        const argList = args.value.trim() ? args.value.trim().split(/\s+/) : [];
+        await api("/api/mcp-servers", { json: { name: sName.value, transport: "stdio", command: cmd.value, args: argList } });
+        await triggerRoute();
+      } catch (x) { toast(x.message, true); }
+    });
+  }
+
+  app.append(h("div", { class: "page-head" }, h("h1", {}, "MCP 配置")), form, stdioForm,
     h("div", { class: "panel section" }, h("h2", {}, "已保存的服务"),
-      ...(rows.length ? rows.map(m => h("div", { class: "row", style: "margin:10px 0" },
-        h("span", {}, `${m.name} · ${m.url} · 未连接`), h("div", { class: "spacer" }),
-        h("button", { class: "btn ghost", onclick: async () => {
-          try { await api(`/api/mcp-servers/${m.id}`, { method: "DELETE" }); await triggerRoute(); }
-          catch (x) { toast(x.message, true); }
-        } }, "删除"))) : [h("p", { class: "muted" }, "尚未配置")])));
+      ...(rows.length ? rows.map(m => {
+        const canDel = m.scope === "personal" || isAdmin;
+        const toolsText = m.tools && m.tools.length ? m.tools.map(t => t.name).join("、") : "未拉取工具";
+        const target = m.transport === "stdio" ? `${m.command} ${(m.args || []).join(" ")}`.trim() : m.url;
+        return h("div", { class: "memory-row" },
+          h("div", { class: "memory-content" },
+            h("div", {}, h("b", {}, m.name), " ",
+              h("span", { class: "chip" }, m.transport || "http"), " ",
+              h("span", { class: "chip" }, m.scope === "workspace" ? "工作区共享" : "个人")),
+            h("div", { class: "small muted" }, target),
+            h("div", { class: "small muted" }, `工具（${(m.tools || []).length}）：${toolsText}`)),
+          h("div", { class: "row" },
+            h("button", {
+              class: "btn sm",
+              onclick: async e => {
+                e.currentTarget.disabled = true;
+                e.currentTarget.textContent = "连接中…";
+                try {
+                  const res = await api(`/api/mcp-servers/${m.id}/tools`, { json: {} });
+                  toast(`连接成功，发现 ${res.tools.length} 个工具`);
+                  await triggerRoute();
+                } catch (x) {
+                  toast(x.message, true);
+                  e.currentTarget.disabled = false;
+                  e.currentTarget.textContent = "刷新工具";
+                }
+              },
+            }, "刷新工具"),
+            canDel ? h("button", {
+              class: "btn ghost",
+              onclick: async () => {
+                try { await api(`/api/mcp-servers/${m.id}`, { method: "DELETE" }); await triggerRoute(); }
+                catch (x) { toast(x.message, true); }
+              },
+            }, "删除") : null));
+      }) : [h("p", { class: "muted" }, "尚未配置")])));
 }

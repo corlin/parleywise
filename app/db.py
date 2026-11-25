@@ -36,7 +36,14 @@ CREATE TABLE IF NOT EXISTS project_memories (
 );
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, url TEXT NOT NULL, created_at REAL NOT NULL
+  name TEXT NOT NULL, url TEXT NOT NULL DEFAULT '',
+  transport TEXT NOT NULL DEFAULT 'http',
+  command TEXT NOT NULL DEFAULT '',
+  args_json TEXT NOT NULL DEFAULT '[]',
+  scope TEXT NOT NULL DEFAULT 'personal',
+  tools_json TEXT NOT NULL DEFAULT '[]',
+  last_checked_at REAL,
+  created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS chat_model_settings (
   id INTEGER PRIMARY KEY CHECK(id = 1), allowed_json TEXT NOT NULL, default_model TEXT NOT NULL
@@ -119,6 +126,17 @@ def init():
         cols = {r[1] for r in con.execute("PRAGMA table_info(model_calls)")}
         if "run_id" not in cols:
             con.execute("ALTER TABLE model_calls ADD COLUMN run_id TEXT")
+        cols = {r[1] for r in con.execute("PRAGMA table_info(mcp_servers)")}
+        for col, ddl in (
+            ("transport", "TEXT NOT NULL DEFAULT 'http'"),
+            ("command", "TEXT NOT NULL DEFAULT ''"),
+            ("args_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("scope", "TEXT NOT NULL DEFAULT 'personal'"),
+            ("tools_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("last_checked_at", "REAL"),
+        ):
+            if col not in cols:
+                con.execute(f"ALTER TABLE mcp_servers ADD COLUMN {col} {ddl}")
 
 
 def log_event(con, doc_id, typ, payload=None, finding_id=None, reviewer=None):

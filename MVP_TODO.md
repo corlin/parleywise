@@ -10,7 +10,8 @@
 - [x] 修正偶数样本中位数计算，并增加回归测试（已提交）。
 - [x] 完成工程收口：`PARLEYWISE_*` 命名统一、`review.py` 拆分为 `runtime/` + `apps/compliance/` + `eval/`、FastAPI 拆分为 `app/routers/`、前端拆分为原生 ES Modules（`app/static/js/`）。
 - [x] 对照《公开募集证券投资基金宣传推介材料管理暂行规定》（中国证监会公告〔2020〕59号）官方原文核对并修正 `rules.json` 第十五条项次映射（待合规顾问终审）。
-- [x] 构建长文体裁、监管典型案例与安全对抗评测集 `golden/real_cases.jsonl`（20 份，含提示注入与跨段边界用例）。
+- [x] 构建长文体裁、监管典型案例与安全对抗评测集 `golden/real_cases.jsonl`（20 份，含提示注入与跨段边界用例），并在在线评测 `real_v04` 中实现 20/20 完成、片段精确率 0.850、费用回传打通（\$0.0268/篇）。
+- [x] 工作台接入多角色并行初审开关、真实长文集演示入口、单任务 `run_id`/token/费用展示，以及基于官方 `mcp` SDK 的 HTTP/`stdio` 工具发现与对话工具调用（含 `tools/compliance_mcp.py`）。
 
 ## P0：验证真实价值和可信度
 

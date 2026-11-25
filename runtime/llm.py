@@ -54,11 +54,26 @@ class LLM:
                 return findings
         raise RuntimeError(f"模型 {model} 两次返回都无法解析为 JSON")
 
+    def chat_messages(self, model, messages, *, tools=None, response_format=None):
+        """通用多轮对话调用，支持可选 tools 与 response_format，返回完整 assistant message。"""
+        req_body = {"model": model, "temperature": 0, "messages": messages}
+        if tools:
+            req_body["tools"] = tools
+        if response_format:
+            req_body["response_format"] = response_format
+        body = json.dumps(req_body, ensure_ascii=False).encode()
+        return self._send_request(model, body)
+
     def _call(self, model, system, user):
-        body = json.dumps({"model": model, "temperature": 0,
-                           "response_format": {"type": "json_object"},
-                           "messages": [{"role": "system", "content": system},
-                                        {"role": "user", "content": user}]}).encode()
+        body = json.dumps({
+            "model": model,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        }).encode()
+        return self._send_request(model, body).get("content") or ""
+
+    def _send_request(self, model, body):
         req = urllib.request.Request(self.base + "/v1/chat/completions", data=body, method="POST",
                                      headers={"Content-Type": "application/json",
                                               "Authorization": f"Bearer {self.key}"})
@@ -70,7 +85,7 @@ class LLM:
                     payload = json.loads(resp.read())
                     cost = resp.headers.get("x-litellm-response-cost")
                 u = payload.get('usage') or {}
-                content = payload['choices'][0]['message'].get('content') or ''
+                message = payload['choices'][0]['message']
                 try:
                     cost_value = float(cost)
                     if not math.isfinite(cost_value) or cost_value < 0:
@@ -108,4 +123,4 @@ class LLM:
                 self.usage["cost_usd"] += cost_value
             except (ValueError, TypeError):
                 self.usage["calls_without_cost"] += 1
-        return content
+        return message
