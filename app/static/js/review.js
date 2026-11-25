@@ -26,6 +26,7 @@ export async function pageList(app) {
       h("td", { class: "title", title: d.title }, d.title),
       h("td", { class: "hide-sm" }, d.doc_type === "public" ? "公募" : "私募"),
       h("td", {}, d.arm === "control" ? h("span", { class: "chip warn" }, "对照组") : h("span", { class: "chip accent" }, "AI 辅助"),
+        d.collaboration ? h("span", { class: "chip", style: "margin-left:4px" }, "多角色") : null,
         d.mode === "offline" ? h("span", { class: "chip", style: "margin-left:4px" }, "仅关键词") : null),
       h("td", {}, ai ? (d.arm === "control" && d.review_status !== "completed" ? h("span", { class: "faint" }, "已隐藏")
         : `${d.snippets} 处 / ${d.ai_findings} 条`) : "—",
@@ -72,11 +73,17 @@ export async function pageNew(app) {
     h("button", { "data-t": "file", onclick: () => setTab("file") }, "上传文件"));
   const control = h("input", { type: "checkbox" });
   const offline = h("input", { type: "checkbox" });
+  const collab = h("input", { type: "checkbox" });
+  offline.addEventListener("change", () => {
+    collab.disabled = offline.checked;
+    if (offline.checked) collab.checked = false;
+  });
   const submit = h("button", { class: "btn primary", style: "width:100%;justify-content:center" }, "开始 AI 初审");
   submit.addEventListener("click", async () => {
     const fd = new FormData();
     fd.append("title", title.value); fd.append("doc_type", docType.value);
     fd.append("arm", control.checked ? "control" : "ai"); fd.append("mode", offline.checked ? "offline" : "full");
+    fd.append("collaboration", collab.checked ? "true" : "false");
     fd.append("golden_case_id", goldenId);
     if (tab === "file") { if (!file) return toast("请先选择文件", true); fd.append("file", file); }
     else { if (!text.value.trim()) return toast("请粘贴材料内容", true); fd.append("text", text.value); }
@@ -84,8 +91,13 @@ export async function pageNew(app) {
     try { const r = await api("/api/documents", { method: "POST", body: fd }); location.hash = `#/doc/${r.id}`; }
     catch (e) { toast(e.message, true); submit.disabled = false; submit.textContent = "开始 AI 初审"; }
   });
-  const goldenSel = h("select", { class: "input" }, h("option", { value: "" }, "选择一个合成样例…"),
-    ...golden.map(g => h("option", { value: g.id }, `${g.id} · ${g.text.slice(0, 26)}…`)));
+  const realG = golden.filter(g => g.dataset === "real");
+  const synG = golden.filter(g => g.dataset !== "real");
+  const opt = g => h("option", { value: g.id }, `${g.id} · ${g.text.slice(0, 26)}…`);
+  const goldenSel = h("select", { class: "input" },
+    h("option", { value: "" }, "选择一个评测样例…"),
+    realG.length ? h("optgroup", { label: `真实长文与对抗集（${realG.length}）` }, ...realG.map(opt)) : null,
+    synG.length ? h("optgroup", { label: `合成回归集（${synG.length}）` }, ...synG.map(opt)) : null);
   goldenSel.addEventListener("change", () => {
     const g = golden.find(x => x.id === goldenSel.value); if (!g) return;
     setTab("paste"); text.value = g.text; count.textContent = `${text.value.length} 字`;
@@ -98,6 +110,7 @@ export async function pageNew(app) {
         h("label", { class: "field" }, h("span", {}, "材料名称"), title),
         h("label", { class: "field" }, h("span", {}, "材料类型"), docType),
         h("label", { class: "check" }, control, h("span", {}, "对照组（不显示 AI 意见）", h("small", {}, "AI 仍在后台初审，但审核人看不到，用于测量“没有 AI 时”的耗时和发现数。完成后可对比。"))),
+        h("label", { class: "check" }, collab, h("span", {}, "多角色并行初审（实验）", h("small", {}, "两个独立初审角色并行检查，再由强模型汇总复核，调用次数与成本会增加。"))),
         h("label", { class: "check" }, offline, h("span", {}, "仅关键词（不调用模型）", h("small", {}, "几秒出结果，只用于演示界面。"))),
         META.key_configured ? null : h("p", { class: "small", style: "color:var(--high);margin:0 0 12px" }, "服务器未配置模型 key，只能用“仅关键词”模式。"),
         submit,
@@ -178,11 +191,17 @@ export async function pageDoc(app, id) {
     const aiF = d.findings.filter(f => f.source === "ai");
     const decided = aiF.filter(f => f.decision).length;
     app.replaceChildren();
+    const u = d.usage;
+    const tokTotal = u ? (u.prompt_tokens || 0) + (u.completion_tokens || 0) : 0;
+    const costLabel = u ? (!u.calls_without_cost ? `$${u.cost_usd.toFixed(4)}` : "费用未知") : null;
     app.append(h("div", { class: "rv-bar" },
       h("a", { class: "btn ghost", href: "#/documents" }, "←"),
       h("h1", { title: d.title }, d.title),
       d.arm === "control" ? h("span", { class: "chip warn" }, "对照组") : h("span", { class: "chip accent" }, "AI 辅助"),
       h("span", { class: "chip" }, d.doc_type === "public" ? "公募" : "私募"),
+      d.collaboration ? h("span", { class: "chip" }, "多角色") : null,
+      u ? h("span", { class: "faint small", title: d.run_id ? `运行 ${d.run_id}` : "" },
+        `${u.calls} 次调用 · ${tokTotal} tok · ${costLabel}${d.run_id ? ` · #${d.run_id.slice(0, 8)}` : ""}`) : null,
       h("div", { class: "spacer" }),
       d.arm === "ai" && !ro() ? h("span", { class: "muted" }, `已处理 ${decided}/${aiF.length}`) : null,
       ro() ? null : h("span", { class: "timer", id: "timer", title: "有效审查时长：页面可见且 2 分钟内有操作才计时" }, "⏱ ", h("span", {}, fmtDur(shownMs))),
@@ -490,7 +509,9 @@ export async function pageMetrics(app) {
     kpi(C.avg_minutes != null ? `${C.avg_minutes} 分` : null, "对照组 平均有效用时", `${C.docs} 份 · 中位数 ${C.median_minutes ?? "—"} 分`),
     kpi(saving != null ? `${saving}%` : null, "用时降幅（目标 ≥ 50%）", enough ? "两组材料不同，只看趋势" : "每组完成至少 5 份后计算"),
     kpi(A.adoption_rate != null ? `${Math.round(A.adoption_rate * 100)}%` : null, "AI 意见采纳率（含修改）", `${A.ai_findings || 0} 条意见`),
-    kpi(A.manual_per_doc, "AI 组每份人工补充问题", "= 审核人认为 AI 漏报的问题")));
+    kpi(A.manual_per_doc, "AI 组每份人工补充问题", "= 审核人认为 AI 漏报的问题"),
+    kpi(A.avg_cost_usd != null ? `$${A.avg_cost_usd.toFixed(4)}` : "未知", "单篇平均模型成本",
+      A.avg_tokens != null ? `均摊 ${A.avg_tokens} token/篇（${A.known_cost_docs} 份含费用）` : "暂无用量数据")));
   const reasons = Object.entries(A.reject_reasons || {});
   const maxR = Math.max(1, ...reasons.map(r => r[1]));
   app.append(h("div", { class: "kpis", style: "grid-template-columns:repeat(auto-fit,minmax(320px,1fr))" },

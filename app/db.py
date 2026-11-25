@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS documents (
   source_filename TEXT, golden_case_id TEXT,
   arm TEXT NOT NULL DEFAULT 'ai',            -- ai：显示 AI 意见；control：对照组，隐藏 AI 意见
   mode TEXT NOT NULL DEFAULT 'full',         -- full：模型流水线；offline：仅关键词
+  collaboration INTEGER NOT NULL DEFAULT 0,  -- 1：开启多角色并行初审实验
+  run_id TEXT,
   status TEXT NOT NULL DEFAULT 'queued',     -- queued/running/done/failed
   stage TEXT, error TEXT, pipeline_seconds REAL, usage_json TEXT, model_info TEXT,
   created_at REAL NOT NULL, created_by TEXT, reviewer TEXT,
@@ -107,6 +109,10 @@ def init():
         cols = {r[1] for r in con.execute("PRAGMA table_info(documents)")}
         if "created_by" not in cols:  # 兼容第一版数据库
             con.execute("ALTER TABLE documents ADD COLUMN created_by TEXT")
+        if "collaboration" not in cols:
+            con.execute("ALTER TABLE documents ADD COLUMN collaboration INTEGER NOT NULL DEFAULT 0")
+        if "run_id" not in cols:
+            con.execute("ALTER TABLE documents ADD COLUMN run_id TEXT")
         cols = {r[1] for r in con.execute("PRAGMA table_info(conversations)")}
         if "summary_through" not in cols:
             con.execute("ALTER TABLE conversations ADD COLUMN summary_through INTEGER NOT NULL DEFAULT 0")

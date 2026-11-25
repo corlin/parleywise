@@ -76,8 +76,11 @@ def run_pipeline(doc_id):
         if llm and not llm.key:
             raise RuntimeError("未设置 LITELLM_API_KEY（mvp0/.env）")
         text = d["text"]
+        collab = bool(d["collaboration"]) if "collaboration" in d.keys() else False
         kept, dropped = review.review_doc(
-            text, d["doc_type"], RULES, llm, CHEAP, STRONG, on_stage=lambda s: set_doc(doc_id, stage=s)
+            text, d["doc_type"], RULES, llm, CHEAP, STRONG,
+            on_stage=lambda s: set_doc(doc_id, stage=s),
+            collaboration=collab,
         )
         secs = round(time.time() - t0, 1)
         with db() as con:
@@ -101,9 +104,10 @@ def run_pipeline(doc_id):
                 "INSERT INTO dropped(doc_id, payload) VALUES (?,?)",
                 [(doc_id, json.dumps(x, ensure_ascii=False)) for x in dropped],
             )
+            model_desc = f"{CHEAP} → {STRONG}" + ("（多角色）" if collab else "") if llm else "仅关键词"
             con.execute(
-                "UPDATE documents SET status='done', stage=NULL, pipeline_seconds=?, usage_json=?, model_info=? WHERE id=?",
-                (secs, json.dumps(llm.usage) if llm else None, f"{CHEAP} → {STRONG}" if llm else "仅关键词", doc_id),
+                "UPDATE documents SET status='done', stage=NULL, pipeline_seconds=?, usage_json=?, model_info=?, run_id=? WHERE id=?",
+                (secs, json.dumps(llm.usage) if llm else None, model_desc, llm.run_id if llm else None, doc_id),
             )
             log_event(con, doc_id, "pipeline_done", {"findings": len(kept), "seconds": secs})
     except Exception as e:  # 失败写库，前端可重试
@@ -187,6 +191,10 @@ def doc_summary(con, d):
     ).fetchone()
     s = {k: d[k] for k in ("id", "title", "doc_type", "arm", "mode", "status", "stage", "error", "created_at",
                            "created_by", "review_status", "active_ms", "conclusion", "reviewer")}
+    s["collaboration"] = bool(d["collaboration"]) if "collaboration" in d.keys() else False
+    s["run_id"] = d["run_id"] if "run_id" in d.keys() else None
+    usage = json.loads(d["usage_json"]) if d["usage_json"] else None
+    s["usage"] = usage
     s.update(ai_findings=c["ai"] or 0, ai_decided=c["ai_decided"] or 0, manual_findings=c["manual"] or 0,
              snippets=c["groups"] or 0)
     if d["arm"] == "control" and d["review_status"] != "completed":
@@ -216,10 +224,17 @@ def _editable(d):
 
 
 def golden_cases():
-    p = ROOT / "golden" / "cases.jsonl"
-    if not p.exists():
-        return {}
-    return {c["id"]: c for c in (json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip())}
+    out = {}
+    for filename, dataset in (("cases.jsonl", "synthetic"), ("real_cases.jsonl", "real")):
+        p = ROOT / "golden" / filename
+        if not p.exists():
+            continue
+        for l in p.read_text(encoding="utf-8").splitlines():
+            if l.strip():
+                c = json.loads(l)
+                c.setdefault("dataset", dataset)
+                out[c["id"]] = c
+    return out
 
 
 @router.get("/api/documents")
@@ -236,6 +251,7 @@ async def create_document(
     text: str = Form(""),
     arm: str = Form("ai"),
     mode: str = Form("full"),
+    collaboration: bool = Form(False),
     golden_case_id: str = Form(""),
     file: UploadFile | None = File(None),
 ):
@@ -255,16 +271,18 @@ async def create_document(
         raise HTTPException(400, "参数不合法")
     if golden_case_id not in golden_cases():
         golden_case_id = ""
+    use_collab = 1 if (collaboration and mode == "full") else 0
     title = title.strip()[:80] or (Path(fname).stem if fname else text[:24].replace("\n", " "))
     who = me(request)["name"]
     with db() as con:
         cur = con.execute(
-            "INSERT INTO documents(title, doc_type, text, source_filename, golden_case_id, arm, mode,"
-            " created_at, created_by) VALUES (?,?,?,?,?,?,?,?,?)",
-            (title, doc_type, text, fname, golden_case_id or None, arm, mode, time.time(), who),
+            "INSERT INTO documents(title, doc_type, text, source_filename, golden_case_id, arm, mode, collaboration,"
+            " created_at, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (title, doc_type, text, fname, golden_case_id or None, arm, mode, use_collab, time.time(), who),
         )
         doc_id = cur.lastrowid
-        log_event(con, doc_id, "created", {"arm": arm, "mode": mode, "file": fname}, reviewer=who)
+        log_event(con, doc_id, "created", {"arm": arm, "mode": mode, "collaboration": bool(use_collab), "file": fname},
+                  reviewer=who)
     enqueue(doc_id)
     return {"id": doc_id}
 
@@ -485,8 +503,16 @@ def metrics():
                 if f["decision"] == "rejected":
                     reasons[f["reject_reason"]] = reasons.get(f["reject_reason"], 0) + 1
             total = sum(dec.values())
-            a.update(ai_findings=len(ai), decisions=dec, reject_reasons=reasons,
-                     adoption_rate=round((dec["accepted"] + dec["modified"]) / total, 3) if total else None)
+            usages = [json.loads(d["usage_json"]) for d in ds if d.get("usage_json")]
+            known_costs = [u["cost_usd"] for u in usages if u and not u.get("calls_without_cost")]
+            toks = [(u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0) for u in usages if u]
+            a.update(
+                ai_findings=len(ai), decisions=dec, reject_reasons=reasons,
+                adoption_rate=round((dec["accepted"] + dec["modified"]) / total, 3) if total else None,
+                avg_tokens=round(sum(toks) / len(toks)) if toks else None,
+                avg_cost_usd=round(sum(known_costs) / len(known_costs), 5) if known_costs else None,
+                known_cost_docs=len(known_costs),
+            )
         else:
             human = {(f["doc_id"], f["rule_id"]) for f in manual}
             aiset = {(f["doc_id"], f["rule_id"]) for f in ai}
@@ -530,4 +556,5 @@ def metrics():
 
 @router.get("/api/golden")
 def list_golden():
-    return [{"id": c["id"], "doc_type": c.get("doc_type", "public"), "text": c["text"]} for c in golden_cases().values()]
+    return [{"id": c["id"], "doc_type": c.get("doc_type", "public"), "dataset": c.get("dataset", "synthetic"),
+             "text": c["text"]} for c in golden_cases().values()]
