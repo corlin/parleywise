@@ -64,6 +64,99 @@ class LLM:
         body = json.dumps(req_body, ensure_ascii=False).encode()
         return self._send_request(model, body)
 
+    def stream_messages(self, model, messages, *, tools=None):
+        """流式对话调用：逐块产出 ('delta', str)，最后产出 ('message', dict) 并记录用量。"""
+        req_body = {
+            "model": model,
+            "temperature": 0,
+            "messages": messages,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            req_body["tools"] = tools
+        body = json.dumps(req_body, ensure_ascii=False).encode()
+        req = urllib.request.Request(
+            self.base + "/v1/chat/completions",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.key}"},
+        )
+        started_at, t0 = time.time(), time.monotonic()
+        event = {"requested_model": model, "attempt": 1, "started_at": started_at}
+        content_parts = []
+        tc_acc = {}
+        usage = {}
+        served_model = None
+        cost_value = None
+        try:
+            with urllib.request.urlopen(req, timeout=240) as resp:
+                cost_value = self._parse_cost(resp.headers.get("x-litellm-response-cost"))
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    chunk = json.loads(data_str)
+                    if isinstance(chunk.get("model"), str):
+                        served_model = chunk["model"]
+                    if isinstance(chunk.get("usage"), dict):
+                        usage = chunk["usage"]
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    piece = delta.get("content")
+                    if isinstance(piece, str) and piece:
+                        content_parts.append(piece)
+                        yield ("delta", piece)
+                    for tc in delta.get("tool_calls") or []:
+                        idx = tc.get("index", 0)
+                        slot = tc_acc.setdefault(idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                        if tc.get("id"):
+                            slot["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            slot["function"]["name"] += fn["name"]
+                        if fn.get("arguments"):
+                            slot["function"]["arguments"] += fn["arguments"]
+        except (urllib.error.URLError, TimeoutError, http.client.HTTPException, ConnectionError, ValueError) as e:
+            event.update(status="failed", duration_ms=round((time.monotonic() - t0) * 1000))
+            self._observe(event)
+            raise RuntimeError(f"网关流式调用失败：{e}") from e
+
+        pt = usage.get("prompt_tokens") if type(usage.get("prompt_tokens")) is int and usage.get("prompt_tokens") >= 0 else None
+        ct = usage.get("completion_tokens") if type(usage.get("completion_tokens")) is int and usage.get("completion_tokens") >= 0 else None
+        event.update(
+            status="responded",
+            served_model=served_model[:200] if isinstance(served_model, str) else None,
+            prompt_tokens=pt,
+            completion_tokens=ct,
+            cost_usd=cost_value,
+            duration_ms=round((time.monotonic() - t0) * 1000),
+        )
+        self._observe(event)
+        with self._usage_lock:
+            self.usage["calls"] += 1
+            self.usage["prompt_tokens"] += pt or 0
+            self.usage["completion_tokens"] += ct or 0
+            if cost_value is None:
+                self.usage["calls_without_cost"] += 1
+            else:
+                self.usage["cost_usd"] += cost_value
+        tool_calls = [tc_acc[k] for k in sorted(tc_acc)] if tc_acc else []
+        yield ("message", {"content": "".join(content_parts), "tool_calls": tool_calls})
+
+    @staticmethod
+    def _parse_cost(raw):
+        try:
+            v = float(raw)
+            return v if math.isfinite(v) and v >= 0 else None
+        except (TypeError, ValueError):
+            return None
+
     def _call(self, model, system, user):
         body = json.dumps({
             "model": model,

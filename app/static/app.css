@@ -314,6 +314,22 @@ body:has(.chat-stage) main { height: 100dvh; padding: 0; }
 .memory-option { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; overflow-wrap: anywhere; cursor: pointer; }
 .picker-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
 .tool-trace-pill { display: inline-block; margin-bottom: 8px; padding: 3px 9px; border-radius: 99px; background: #eef5f7; color: #2b596b; font-size: 12px; }
+.send-button.is-stop { background: #a5352c; }
+.send-button.is-stop:hover { background: #8c2a22; }
+.md-body { white-space: normal; }
+.md-body .md-p { margin: 0 0 8px; }
+.md-body .md-p:last-child { margin-bottom: 0; }
+.md-body .md-h { margin: 12px 0 6px; font-size: 15px; font-weight: 600; }
+.md-body .md-list { margin: 4px 0 10px; padding-left: 20px; }
+.md-body .md-list li { margin: 3px 0; }
+.md-body .inline-code { padding: 1px 5px; border-radius: 4px; background: #f1f4f6; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+.md-body .md-pre { margin: 8px 0; padding: 10px 12px; border-radius: 8px; background: #f4f6f8; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.5; }
+.md-body .md-table-wrap { overflow-x: auto; margin: 8px 0; }
+.md-body .md-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.md-body .md-table th, .md-body .md-table td { padding: 6px 10px; border: 1px solid var(--line); text-align: left; }
+.md-body .md-table th { background: #f7f9fa; font-weight: 600; }
+.is-streaming::after { content: "▍"; display: inline-block; margin-left: 2px; color: #477994; animation: blink 1s steps(2) infinite; }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 .memory-section { margin: 18px 0; padding: 20px; max-width: 850px; }
 .memory-section h2 { margin: 0; font-size: 17px; }
 .memory-section > p { margin: 8px 0 16px; }

@@ -100,3 +100,47 @@ class McpConfigTests(unittest.TestCase):
         last = convo['messages'][-1]['content']
         self.assertIn('R18 针对无依据的优越性用语。', last)
         self.assertIn('已调用工具：合规规则检索（本地）.get_rule', last)
+
+    def test_stream_chat_with_mcp_tool_call(self):
+        with patch.object(deps, 'me', return_value={'id': 1, 'role': 'admin'}):
+            sid = asyncio.run(chat_routes.add_preset_compliance_mcp(_Req()))['id']
+        cid = conversations.create(1, 'Stream MCP')
+        rounds = []
+
+        def fake_stream(_llm, model, messages, *, tools=None):
+            rounds.append(len(messages))
+            if len(rounds) == 1:
+                yield ('message', {
+                    'content': '',
+                    'tool_calls': [{
+                        'id': 'tc_s1',
+                        'type': 'function',
+                        'function': {'name': f'mcp_{sid}__get_rule', 'arguments': '{"rule_id":"R18"}'},
+                    }],
+                })
+            else:
+                yield ('delta', '规则 R18 ')
+                yield ('delta', '已核对。')
+                yield ('message', {'content': '规则 R18 已核对。', 'tool_calls': []})
+
+        with patch.object(deps, 'me', return_value={'id': 1, 'role': 'admin'}), \
+                patch.object(deps, 'available_chat_models', return_value={'models': [{'id': 'm1', 'name': 'm1'}], 'default': 'm1'}), \
+                patch.dict('os.environ', {'LITELLM_API_KEY': 'test-key'}), \
+                patch.object(chat_routes.review.LLM, 'stream_messages', fake_stream):
+            resp = asyncio.run(chat_routes.stream_conversation_message(
+                cid, _Req({'content': '流式查 R18', 'model': 'm1', 'mcp_server_ids': [sid]})
+            ))
+            async def collect():
+                out = []
+                async for chunk in resp.body_iterator:
+                    out.append(chunk if isinstance(chunk, str) else chunk.decode())
+                return ''.join(out)
+            raw = asyncio.run(collect())
+
+        self.assertIn('"type": "tool_start"', raw)
+        self.assertIn('"type": "tool_end"', raw)
+        self.assertIn('"type": "delta"', raw)
+        self.assertIn('"type": "done"', raw)
+        saved = conversations.get(1, cid)['messages'][-1]['content']
+        self.assertIn('规则 R18 已核对。', saved)
+        self.assertIn('已调用工具：合规规则检索（本地）.get_rule', saved)

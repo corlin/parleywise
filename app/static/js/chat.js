@@ -1,5 +1,94 @@
 import { $, META, addCleanup, api, chatMcpChoices, chatMemoryChoices, chatModelChoices, chatProjectMemoryChoices, fmtTime, h, openModal, toast, triggerRoute } from "./core.js";
 
+function inlineNodes(text) {
+  const nodes = [];
+  const re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let last = 0, m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    const tok = m[0];
+    if (tok.startsWith("`")) nodes.push(h("code", { class: "inline-code" }, tok.slice(1, -1)));
+    else nodes.push(h("strong", {}, tok.slice(2, -2)));
+    last = re.lastIndex;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+function renderMarkdown(text) {
+  const frag = document.createDocumentFragment();
+  const blocks = String(text || "").split(/(```[\s\S]*?```)/g);
+  for (const blk of blocks) {
+    if (!blk) continue;
+    if (blk.startsWith("```") && blk.endsWith("```")) {
+      const inner = blk.slice(3, -3).replace(/^[a-zA-Z0-9_-]*\n/, "");
+      frag.append(h("pre", { class: "md-pre" }, h("code", {}, inner)));
+      continue;
+    }
+    const lines = blk.split("\n");
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim()) { i++; continue; }
+      // 表格
+      if (line.trim().startsWith("|") && i + 1 < lines.length && /^\|[\s:|-]+\|/.test(lines[i + 1].trim())) {
+        const parseRow = r => r.trim().replace(/^\|+|\|+$/g, "").split("|").map(c => c.trim());
+        const headers = parseRow(line);
+        i += 2;
+        const bodyRows = [];
+        while (i < lines.length && lines[i].trim().startsWith("|")) {
+          bodyRows.push(parseRow(lines[i]));
+          i++;
+        }
+        frag.append(h("div", { class: "md-table-wrap" }, h("table", { class: "md-table" },
+          h("thead", {}, h("tr", {}, ...headers.map(c => h("th", {}, ...inlineNodes(c))))),
+          h("tbody", {}, ...bodyRows.map(r => h("tr", {}, ...r.map(c => h("td", {}, ...inlineNodes(c)))))))));
+        continue;
+      }
+      // 标题
+      const hm = line.match(/^(#{1,4})\s+(.+)$/);
+      if (hm) {
+        frag.append(h(`h${Math.min(4, hm[1].length + 1)}`, { class: "md-h" }, ...inlineNodes(hm[2])));
+        i++;
+        continue;
+      }
+      // 列表
+      if (/^\s*[-*]\s+/.test(line)) {
+        const ul = h("ul", { class: "md-list" });
+        while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+          ul.append(h("li", {}, ...inlineNodes(lines[i].replace(/^\s*[-*]\s+/, ""))));
+          i++;
+        }
+        frag.append(ul);
+        continue;
+      }
+      if (/^\s*\d+\.\s+/.test(line)) {
+        const ol = h("ol", { class: "md-list" });
+        while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+          ol.append(h("li", {}, ...inlineNodes(lines[i].replace(/^\s*\d+\.\s+/, ""))));
+          i++;
+        }
+        frag.append(ol);
+        continue;
+      }
+      // 普通段落
+      const pLines = [];
+      while (i < lines.length && lines[i].trim() && !lines[i].trim().startsWith("|")
+             && !/^(#{1,4})\s+/.test(lines[i]) && !/^\s*([-*]|\d+\.)\s+/.test(lines[i])) {
+        pLines.push(lines[i]);
+        i++;
+      }
+      const p = h("p", { class: "md-p" });
+      pLines.forEach((pl, idx) => {
+        if (idx > 0) p.append(h("br"));
+        p.append(...inlineNodes(pl));
+      });
+      frag.append(p);
+    }
+  }
+  return frag;
+}
+
 export async function refreshChatHistory() {
   const target = $("#chat-history");
   if (!target || !META.user) return;
@@ -91,7 +180,9 @@ export async function pageChat(app) {
         h("div", { class: "message-content" },
           h("div", { class: "message-author" }, m.role === "user" ? "你" : "Parleywise"),
           toolTrace ? h("div", { class: "tool-trace-pill" }, `⌘ 已调用工具：${toolTrace}`) : null,
-          h("div", { class: "message-text" }, bodyText))));
+          m.role === "assistant"
+            ? h("div", { class: "message-text md-body" }, renderMarkdown(bodyText))
+            : h("div", { class: "message-text" }, bodyText))));
     }
   }
   const input = h("textarea", { rows: 2, maxlength: 8000, "aria-label": "输入消息", placeholder: "向 Parleywise 提问…" });
@@ -205,20 +296,52 @@ export async function pageChat(app) {
   const form = h("form", { class: "composer" }, input,
     h("div", { class: "composer-footer" }, modelPicker, memoryPicker, mcpPicker, status, retryModels, h("div", { class: "spacer" }), send));
   input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); } });
+  let activeStreamAbort = null;
+  addCleanup(() => { if (activeStreamAbort) activeStreamAbort.abort(); });
   form.addEventListener("submit", async e => {
     e.preventDefault();
+    if (activeStreamAbort) { activeStreamAbort.abort(); return; }
     const content = input.value.trim();
     if (!content) return;
     closePickers();
     const origin = location.hash || "#/chat";
-    send.disabled = true; input.disabled = true; modelPicker.disabled = true; status.textContent = "正在思考…";
+    const ctrl = new AbortController();
+    activeStreamAbort = ctrl;
+    input.value = "";
+    input.disabled = true;
+    modelPicker.disabled = true;
+    send.disabled = false;
+    send.classList.add("is-stop");
+    send.replaceChildren("停止", h("span", { "aria-hidden": "true" }, "■"));
+    status.textContent = "正在连接…";
+
     const welcome = thread.querySelector(".chat-welcome");
     if (welcome) welcome.hidden = true;
     const pendingMsg = h("article", { class: "chat-message is-user" },
       h("div", { class: "message-avatar", "aria-hidden": "true" }, "你"),
       h("div", { class: "message-content" }, h("div", { class: "message-author" }, "你"), h("div", { class: "message-text" }, content)));
-    thread.append(pendingMsg);
+    const toolPill = h("div", { class: "tool-trace-pill", hidden: true });
+    const botBody = h("div", { class: "message-text md-body is-streaming" });
+    const botMsg = h("article", { class: "chat-message is-assistant" },
+      h("div", { class: "message-avatar", "aria-hidden": "true" }, "P"),
+      h("div", { class: "message-content" },
+        h("div", { class: "message-author" }, "Parleywise"),
+        toolPill,
+        botBody));
+    thread.append(pendingMsg, botMsg);
     thread.scrollTop = thread.scrollHeight;
+
+    const resetComposer = () => {
+      activeStreamAbort = null;
+      send.classList.remove("is-stop");
+      send.replaceChildren("发送", h("span", { "aria-hidden": "true" }, "↑"));
+      send.disabled = !modelPicker.value;
+      input.disabled = false;
+      modelPicker.disabled = !models.length;
+    };
+
+    let accText = "";
+    const tracesUsed = [];
     try {
       if (!id) {
         const oldKey = modelKey();
@@ -230,24 +353,83 @@ export async function pageChat(app) {
         }
       }
       chatModelChoices.set(modelKey(), modelPicker.value);
-      await api(`/api/conversations/${id}/messages`, {
-        json: {
+      const resp = await fetch(`/api/conversations/${id}/messages/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ctrl.signal,
+        body: JSON.stringify({
           content,
           model: modelPicker.value,
           memory_ids: personalInputs.filter(([, c]) => c.checked).map(([m]) => m.id),
           project_memory_ids: projectInputs.filter(([, c]) => c.checked).map(([m]) => m.id),
           mcp_server_ids: mcpInputs.filter(([, c]) => c.checked).map(([s]) => s.id),
-        },
+        }),
       });
+      if (resp.status === 401) { window.location.reload(); return; }
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.detail || `请求失败（${resp.status}）`);
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let streamDone = false;
+      while (!streamDone) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          const s = line.trim();
+          if (!s.startsWith("data:")) continue;
+          const ev = JSON.parse(s.slice(5).trim());
+          if (ev.type === "tool_start") {
+            status.textContent = "正在调用工具…";
+            toolPill.hidden = false;
+            toolPill.textContent = `⌘ 正在调用工具：${(ev.tools || []).join("、")}`;
+          } else if (ev.type === "tool_end") {
+            for (const tn of ev.tools || []) if (!tracesUsed.includes(tn)) tracesUsed.push(tn);
+            toolPill.hidden = false;
+            toolPill.textContent = `⌘ 已调用工具：${tracesUsed.join("、")}`;
+            status.textContent = "正在生成回复…";
+          } else if (ev.type === "delta") {
+            status.textContent = "正在生成…";
+            const nearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
+            accText += ev.text;
+            botBody.textContent = accText;
+            if (nearBottom) thread.scrollTop = thread.scrollHeight;
+          } else if (ev.type === "error") {
+            throw new Error(ev.detail || "生成失败");
+          } else if (ev.type === "done") {
+            streamDone = true;
+            botBody.classList.remove("is-streaming");
+            botBody.replaceChildren(renderMarkdown(accText));
+          }
+        }
+      }
+      resetComposer();
+      status.textContent = "";
       await refreshChatHistory();
       if ((location.hash || "#/chat") !== origin) return;
-      if (!match) location.hash = `#/chat/${id}`; else await triggerRoute();
+      if (!match) location.hash = `#/chat/${id}`;
+      else if (window.innerWidth > 720) input.focus();
     } catch (x) {
+      botBody.classList.remove("is-streaming");
+      resetComposer();
+      if (x.name === "AbortError") {
+        status.textContent = "已停止生成";
+        if (!accText) { botMsg.remove(); pendingMsg.remove(); input.value = content; if (welcome) welcome.hidden = false; }
+        else { botBody.replaceChildren(renderMarkdown(accText + "\n\n（已中断）")); }
+        return;
+      }
+      botMsg.remove();
       pendingMsg.remove();
+      input.value = content;
       if (welcome) welcome.hidden = false;
       status.textContent = "发送失败，请重试";
       toast(x.message, true);
-      send.disabled = false; input.disabled = false; modelPicker.disabled = false;
       input.focus();
     }
   });
