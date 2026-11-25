@@ -235,8 +235,9 @@ body:has(.chat-stage) main { height: 100dvh; padding: 0; }
 .rv-bar { top: 0; }
 .rv-text { top: 72px; max-height: calc(100vh - 88px); }
 .chat-stage { height: 100%; display: flex; flex-direction: column; min-width: 0; }
-.chat-toolbar { display: flex; align-items: center; gap: 12px; min-height: 72px; padding: 12px 32px; border-bottom: 1px solid #eef1f1; }
-.chat-heading { font-weight: 600; color: #233740; font-size: 14px; }
+.chat-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 72px; padding: 12px 32px; border-bottom: 1px solid #eef1f1; }
+.chat-toolbar > div:first-child { min-width: 0; flex: 1 1 200px; }
+.chat-heading { font-weight: 600; color: #233740; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-subheading { color: #829198; font-size: 12px; }
 .chat-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 30px max(28px, calc((100% - 780px)/2)); }
 .chat-welcome { min-height: 100%; display: flex; flex-direction: column; justify-content: center; padding-bottom: 36px; }
@@ -253,8 +254,11 @@ body:has(.chat-stage) main { height: 100dvh; padding: 0; }
 .chat-message { display: flex; gap: 13px; margin: 0 0 28px; }
 .chat-message.is-user .message-avatar { background: #edf1f2; color: #596c74; }
 .chat-message.is-assistant .message-avatar { border-radius: 9px; background: #284b62; color: #fff; font-family: Georgia, serif; font-size: 16px; }
-.message-content { min-width: 0; padding-top: 3px; }
-.message-author { font-size: 13px; font-weight: 600; color: #30454d; margin-bottom: 7px; }
+.message-content { flex: 1; min-width: 0; padding-top: 3px; }
+.message-author { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #30454d; margin-bottom: 7px; }
+.msg-copy-btn { margin-left: auto; border: 0; background: transparent; color: var(--muted); font-size: 12px; font-weight: 400; cursor: pointer; padding: 2px 6px; border-radius: 5px; opacity: 0; transition: opacity .15s, background .15s; }
+.chat-message:hover .msg-copy-btn, .msg-copy-btn:focus-visible { opacity: 1; }
+.msg-copy-btn:hover { background: #eef2f4; color: var(--text); }
 .message-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; font-size: 14px; color: #35484f; }
 .chat-summary { background: #f5f8f8; border: 1px solid #e3ebeb; border-radius: 9px; padding: 12px 14px; margin-bottom: 25px; font-size: 13px; color: #50666e; }
 .chat-summary summary { cursor: pointer; font-weight: 600; }

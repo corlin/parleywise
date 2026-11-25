@@ -89,6 +89,42 @@ function renderMarkdown(text) {
   return frag;
 }
 
+function createMessageCard(role, rawText = "", { streaming = false } = {}) {
+  let bodyText = rawText;
+  let toolTrace = null;
+  if (role === "assistant") {
+    const tm = bodyText.match(/\n\n\[已调用工具：([^\]]+)\]$/);
+    if (tm) {
+      bodyText = bodyText.slice(0, tm.index);
+      toolTrace = tm[1];
+    }
+  }
+  const toolPill = h("div", { class: "tool-trace-pill", hidden: !toolTrace }, toolTrace ? `⌘ 已调用工具：${toolTrace}` : "");
+  const bodyEl = role === "assistant"
+    ? h("div", { class: "message-text md-body" + (streaming ? " is-streaming" : "") }, streaming ? "" : renderMarkdown(bodyText))
+    : h("div", { class: "message-text" }, bodyText);
+  let copyText = bodyText;
+  const copyBtn = role === "assistant" ? h("button", {
+    class: "msg-copy-btn",
+    type: "button",
+    hidden: streaming,
+    onclick: async e => {
+      try {
+        await navigator.clipboard.writeText(copyText);
+        e.currentTarget.textContent = "已复制";
+        setTimeout(() => { if (e.currentTarget) e.currentTarget.textContent = "复制"; }, 1800);
+      } catch { toast("复制失败，请手动选择", true); }
+    },
+  }, "复制") : null;
+  const card = h("article", { class: `chat-message ${role === "user" ? "is-user" : "is-assistant"}` },
+    h("div", { class: "message-avatar", "aria-hidden": "true" }, role === "user" ? "你" : "P"),
+    h("div", { class: "message-content" },
+      h("div", { class: "message-author" }, role === "user" ? "你" : "Parleywise", copyBtn),
+      toolPill,
+      bodyEl));
+  return { card, bodyEl, toolPill, copyBtn, setCopyText: t => { copyText = t; } };
+}
+
 export async function refreshChatHistory() {
   const target = $("#chat-history");
   if (!target || !META.user) return;
@@ -166,23 +202,7 @@ export async function pageChat(app) {
         h("button", { class: "btn", type: "button", onclick: editSummary }, "编辑摘要")));
     }
     for (const m of convo.messages) {
-      let bodyText = m.content;
-      let toolTrace = null;
-      if (m.role === "assistant") {
-        const tm = bodyText.match(/\n\n\[已调用工具：([^\]]+)\]$/);
-        if (tm) {
-          bodyText = bodyText.slice(0, tm.index);
-          toolTrace = tm[1];
-        }
-      }
-      thread.append(h("article", { class: `chat-message ${m.role === "user" ? "is-user" : "is-assistant"}` },
-        h("div", { class: "message-avatar", "aria-hidden": "true" }, m.role === "user" ? "你" : "P"),
-        h("div", { class: "message-content" },
-          h("div", { class: "message-author" }, m.role === "user" ? "你" : "Parleywise"),
-          toolTrace ? h("div", { class: "tool-trace-pill" }, `⌘ 已调用工具：${toolTrace}`) : null,
-          m.role === "assistant"
-            ? h("div", { class: "message-text md-body" }, renderMarkdown(bodyText))
-            : h("div", { class: "message-text" }, bodyText))));
+      thread.append(createMessageCard(m.role, m.content).card);
     }
   }
   const input = h("textarea", { rows: 2, maxlength: 8000, "aria-label": "输入消息", placeholder: "向 Parleywise 提问…" });
@@ -317,17 +337,8 @@ export async function pageChat(app) {
 
     const welcome = thread.querySelector(".chat-welcome");
     if (welcome) welcome.hidden = true;
-    const pendingMsg = h("article", { class: "chat-message is-user" },
-      h("div", { class: "message-avatar", "aria-hidden": "true" }, "你"),
-      h("div", { class: "message-content" }, h("div", { class: "message-author" }, "你"), h("div", { class: "message-text" }, content)));
-    const toolPill = h("div", { class: "tool-trace-pill", hidden: true });
-    const botBody = h("div", { class: "message-text md-body is-streaming" });
-    const botMsg = h("article", { class: "chat-message is-assistant" },
-      h("div", { class: "message-avatar", "aria-hidden": "true" }, "P"),
-      h("div", { class: "message-content" },
-        h("div", { class: "message-author" }, "Parleywise"),
-        toolPill,
-        botBody));
+    const { card: pendingMsg } = createMessageCard("user", content);
+    const { card: botMsg, bodyEl: botBody, toolPill, copyBtn, setCopyText } = createMessageCard("assistant", "", { streaming: true });
     thread.append(pendingMsg, botMsg);
     thread.scrollTop = thread.scrollHeight;
 
@@ -341,6 +352,13 @@ export async function pageChat(app) {
     };
 
     let accText = "";
+    let rafPending = false;
+    const flushMarkdown = () => {
+      rafPending = false;
+      const nearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
+      botBody.replaceChildren(renderMarkdown(accText));
+      if (nearBottom) thread.scrollTop = thread.scrollHeight;
+    };
     const tracesUsed = [];
     try {
       if (!id) {
@@ -396,16 +414,19 @@ export async function pageChat(app) {
             status.textContent = "正在生成回复…";
           } else if (ev.type === "delta") {
             status.textContent = "正在生成…";
-            const nearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
             accText += ev.text;
-            botBody.textContent = accText;
-            if (nearBottom) thread.scrollTop = thread.scrollHeight;
+            if (!rafPending) {
+              rafPending = true;
+              requestAnimationFrame(flushMarkdown);
+            }
           } else if (ev.type === "error") {
             throw new Error(ev.detail || "生成失败");
           } else if (ev.type === "done") {
             streamDone = true;
             botBody.classList.remove("is-streaming");
-            botBody.replaceChildren(renderMarkdown(accText));
+            flushMarkdown();
+            setCopyText(accText);
+            if (copyBtn) copyBtn.hidden = false;
           }
         }
       }
