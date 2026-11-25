@@ -1,6 +1,10 @@
 """对话、个人/项目记忆与 MCP 地址配置路由。"""
 import asyncio
+import ipaddress
 import json
+import os
+import re
+import socket
 import sys
 import threading
 import uuid
@@ -15,6 +19,54 @@ from ..deps import review
 router = APIRouter()
 # 对话中的材料会发送给配置的模型网关；数据按账号隔离，不用于合规审查结论。
 _chat_lock = threading.Lock()
+
+
+def _require_admin(request: Request, msg: str):
+    if deps.me(request).get("role") != "admin":
+        raise HTTPException(403, msg)
+
+
+async def _memory_content(request: Request):
+    body = await request.json()
+    content = deps._s(body.get("content"))
+    if not content or len(content) > 1000:
+        raise HTTPException(400, "记忆须为 1–1000 字")
+    return content
+
+
+def _parse_id_list(raw, label: str, *, limit: int = 20):
+    if not isinstance(raw, list) or len(raw) > limit or any(type(i) is not int or i <= 0 for i in raw):
+        raise HTTPException(400, f"{label}选择无效")
+    return raw
+
+
+def _validate_http_mcp_url(url: str):
+    try:
+        parts = urlsplit(url)
+        valid = (parts.scheme in ("http", "https") and parts.hostname and not parts.username
+                 and not parts.password and not parts.query and not parts.fragment and parts.port != 0)
+    except ValueError:
+        valid = False
+    if len(url) > 1000 or not valid:
+        raise HTTPException(400, "请输入不含凭证、查询参数的 HTTP(S) 地址")
+    if os.environ.get("PARLEYWISE_ALLOW_PRIVATE_MCP") == "1":
+        return
+    host = parts.hostname.lower()
+    if host == "localhost" or host.endswith(".local"):
+        raise HTTPException(400, "不允许连接本机或内网 MCP 地址")
+    try:
+        ip = ipaddress.ip_address(host)
+        if not ip.is_global:
+            raise HTTPException(400, "不允许连接私有、回环或保留网段 MCP 地址")
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+            for info in infos:
+                addr = ipaddress.ip_address(info[4][0])
+                if not addr.is_global:
+                    raise HTTPException(400, "不允许解析到私有或回环地址")
+        except socket.gaierror:
+            pass
 
 
 @router.get("/api/conversations")
@@ -34,12 +86,8 @@ def list_project_memories():
 
 @router.post("/api/project-memories")
 async def create_project_memory(request: Request):
-    if deps.me(request)["role"] != "admin":
-        raise HTTPException(403, "只有管理员可以修改项目记忆")
-    body = await request.json()
-    content = deps._s(body.get("content"))
-    if not content or len(content) > 1000:
-        raise HTTPException(400, "记忆须为 1–1000 字")
+    _require_admin(request, "只有管理员可以修改项目记忆")
+    content = await _memory_content(request)
     if len(memories.list_project()) >= 20:
         raise HTTPException(400, "最多保存 20 条项目记忆")
     return {"id": memories.create_project(deps.me(request)["id"], content)}
@@ -47,12 +95,8 @@ async def create_project_memory(request: Request):
 
 @router.patch("/api/project-memories/{memory_id}")
 async def update_project_memory(memory_id: int, request: Request):
-    if deps.me(request)["role"] != "admin":
-        raise HTTPException(403, "只有管理员可以修改项目记忆")
-    body = await request.json()
-    content = deps._s(body.get("content"))
-    if not content or len(content) > 1000:
-        raise HTTPException(400, "记忆须为 1–1000 字")
+    _require_admin(request, "只有管理员可以修改项目记忆")
+    content = await _memory_content(request)
     if not memories.update_project(memory_id, content):
         raise HTTPException(404, "记忆不存在")
     return {"ok": True}
@@ -60,8 +104,7 @@ async def update_project_memory(memory_id: int, request: Request):
 
 @router.delete("/api/project-memories/{memory_id}")
 def delete_project_memory(memory_id: int, request: Request):
-    if deps.me(request)["role"] != "admin":
-        raise HTTPException(403, "只有管理员可以修改项目记忆")
+    _require_admin(request, "只有管理员可以修改项目记忆")
     if not memories.delete_project(memory_id):
         raise HTTPException(404, "记忆不存在")
     return {"ok": True}
@@ -82,18 +125,10 @@ async def create_mcp_server(request: Request):
     user = deps.me(request)
     if transport == "http":
         url = deps._s(body.get("url"))
-        try:
-            parts = urlsplit(url)
-            valid = (parts.scheme in ("http", "https") and parts.hostname and not parts.username
-                     and not parts.password and not parts.query and not parts.fragment and parts.port != 0)
-        except ValueError:
-            valid = False
-        if len(url) > 1000 or not valid:
-            raise HTTPException(400, "请输入不含凭证、查询参数的 HTTP(S) 地址")
+        _validate_http_mcp_url(url)
         return {"id": mcp_config.create(user["id"], name, url, transport="http", scope="personal")}
     if transport == "stdio":
-        if user.get("role") != "admin":
-            raise HTTPException(403, "仅管理员可添加本地 stdio MCP 服务")
+        _require_admin(request, "仅管理员可添加本地 stdio MCP 服务")
         command = deps._s(body.get("command"))
         args = body.get("args") or []
         if not command or len(command) > 300 or not isinstance(args, list) or len(args) > 20 or any(not isinstance(a, str) for a in args):
@@ -104,11 +139,15 @@ async def create_mcp_server(request: Request):
 
 @router.post("/api/mcp-servers/preset-compliance")
 async def add_preset_compliance_mcp(request: Request):
+    _require_admin(request, "仅管理员可添加预设本地 MCP 服务")
     user = deps.me(request)
-    if user.get("role") != "admin":
-        raise HTTPException(403, "仅管理员可添加预设本地 MCP 服务")
     script = str(Path(__file__).resolve().parent.parent.parent / "tools" / "compliance_mcp.py")
-    sid = mcp_config.create(
+    existing = next(
+        (s for s in mcp_config.list_for(user["id"])
+         if s.get("transport") == "stdio" and s.get("args") == [script]),
+        None,
+    )
+    sid = existing["id"] if existing else mcp_config.create(
         user["id"],
         "合规规则检索（本地）",
         transport="stdio",
@@ -148,10 +187,7 @@ def delete_mcp_server(server_id: int, request: Request):
 
 @router.post("/api/memories")
 async def create_memory(request: Request):
-    body = await request.json()
-    content = deps._s(body.get("content"))
-    if not content or len(content) > 1000:
-        raise HTTPException(400, "记忆须为 1–1000 字")
+    content = await _memory_content(request)
     if len(memories.list_for(deps.me(request)["id"])) >= 20:
         raise HTTPException(400, "最多保存 20 条记忆")
     return {"id": memories.create(deps.me(request)["id"], content)}
@@ -166,10 +202,7 @@ def delete_memory(memory_id: int, request: Request):
 
 @router.patch("/api/memories/{memory_id}")
 async def update_memory(memory_id: int, request: Request):
-    body = await request.json()
-    content = deps._s(body.get("content"))
-    if not content or len(content) > 1000:
-        raise HTTPException(400, "记忆须为 1–1000 字")
+    content = await _memory_content(request)
     if not memories.update(deps.me(request)["id"], memory_id, content):
         raise HTTPException(404, "记忆不存在")
     return {"ok": True}
@@ -227,7 +260,10 @@ def _chat_with_mcp_tools(system, history, *, user_id, conversation_id, model, se
     openai_tools = []
     for srv in servers:
         for t in srv.get("tools") or []:
-            fn_name = f"mcp_{srv['id']}__{t['name']}"[:64]
+            safe = re.sub(r"[^a-zA-Z0-9_-]", "_", t["name"])
+            fn_name = f"mcp_{srv['id']}__{safe}"[:64]
+            if fn_name in tool_map:
+                fn_name = f"mcp_{srv['id']}_{len(tool_map)}__{safe}"[:64]
             tool_map[fn_name] = (srv, t["name"])
             openai_tools.append({
                 "type": "function",
@@ -308,23 +344,18 @@ async def send_conversation_message(conversation_id: int, request: Request):
             pending = [m for m in convo["messages"] if m["id"] > convo["summary_through"]]
             ids = body.get("memory_ids")
             if ids is not None:
-                if not isinstance(ids, list) or len(ids) > 20 or any(type(i) is not int or i <= 0 for i in ids):
-                    raise HTTPException(400, "记忆选择无效")
+                _parse_id_list(ids, "记忆")
                 chosen = memories.selected(uid, ids)
                 if len(chosen) != len(set(ids)):
                     raise HTTPException(400, "所选记忆不存在")
                 saved = [m["content"] for m in chosen]
             else:
                 saved = [m["content"] for m in memories.list_for(uid)] if body.get("use_memory") is True else []
-            project_ids = body.get("project_memory_ids", [])
-            if not isinstance(project_ids, list) or len(project_ids) > 20 or any(type(i) is not int or i <= 0 for i in project_ids):
-                raise HTTPException(400, "项目记忆选择无效")
+            project_ids = _parse_id_list(body.get("project_memory_ids", []), "项目记忆")
             project = memories.selected_project(project_ids)
             if len(project) != len(set(project_ids)):
                 raise HTTPException(400, "所选项目记忆不存在")
-            mcp_ids = body.get("mcp_server_ids", [])
-            if not isinstance(mcp_ids, list) or len(mcp_ids) > 5 or any(type(i) is not int or i <= 0 for i in mcp_ids):
-                raise HTTPException(400, "MCP 服务选择无效")
+            mcp_ids = _parse_id_list(body.get("mcp_server_ids", []), "MCP 服务", limit=5)
             servers = mcp_config.selected(uid, mcp_ids)
             if len(servers) != len(set(mcp_ids)):
                 raise HTTPException(400, "所选 MCP 服务不存在")

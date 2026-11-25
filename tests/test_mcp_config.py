@@ -52,9 +52,19 @@ class McpConfigTests(unittest.TestCase):
             res = asyncio.run(chat_routes.add_preset_compliance_mcp(_Req()))
             sid = res['id']
             self.assertEqual({t['name'] for t in res['tools']}, {'list_rule_sources', 'search_rules', 'get_rule'})
+            # 幂等：重复添加返回同一条配置
+            res2 = asyncio.run(chat_routes.add_preset_compliance_mcp(_Req()))
+            self.assertEqual(res2['id'], sid)
         # 非管理员可见工作区共享 MCP，但不能删除
         self.assertEqual(len(mcp_config.list_for(2)), 1)
         self.assertFalse(mcp_config.delete(2, sid, is_admin=False))
+
+    def test_http_mcp_blocks_private_and_loopback_urls(self):
+        with patch.object(deps, 'me', return_value={'id': 2, 'role': 'reviewer'}):
+            for bad_url in ('http://127.0.0.1:8000/mcp', 'http://localhost:9000/mcp', 'http://192.168.1.10/mcp'):
+                with self.assertRaises(HTTPException) as err:
+                    asyncio.run(chat_routes.create_mcp_server(_Req({'name': 'ssrf', 'url': bad_url})))
+                self.assertEqual(err.exception.status_code, 400)
 
     def test_chat_executes_mcp_tool_call_and_appends_trace(self):
         with patch.object(deps, 'me', return_value={'id': 1, 'role': 'admin'}):
