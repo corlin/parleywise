@@ -302,11 +302,15 @@ body:has(.chat-stage) main { height: 100dvh; padding: 0; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 /* 记忆选择与管理 */
 .memory-picker { position: relative; color: #536d76; font-size: 12px; }
-.memory-picker > summary { cursor: pointer; padding: 6px 2px; }
-.memory-picker-body { position: absolute; z-index: 25; bottom: calc(100% + 10px); left: -12px; width: min(360px, calc(100vw - 50px)); max-height: 45vh; overflow: auto; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: 0 10px 30px rgba(20,40,50,.15); }
+.memory-picker > summary { cursor: pointer; padding: 5px 9px; border: 1px solid transparent; border-radius: 7px; list-style: none; user-select: none; }
+.memory-picker > summary:hover { background: #f3f7f8; }
+.memory-picker.has-selection > summary { border-color: #b7ced5; background: #eef6f8; color: #244b5a; font-weight: 500; }
+.memory-picker-body { position: absolute; z-index: 25; bottom: calc(100% + 10px); left: 0; width: min(380px, calc(100vw - 40px)); max-height: 45vh; overflow: auto; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: 0 10px 30px rgba(20,40,50,.15); }
 .memory-picker-body p { margin: 4px 0 10px; }
 .memory-picker-group { margin: 10px 0; }
-.memory-option { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; overflow-wrap: anywhere; }
+.memory-option { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; overflow-wrap: anywhere; cursor: pointer; }
+.picker-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.tool-trace-pill { display: inline-block; margin-bottom: 8px; padding: 3px 9px; border-radius: 99px; background: #eef5f7; color: #2b596b; font-size: 12px; }
 .memory-section { margin: 18px 0; padding: 20px; max-width: 850px; }
 .memory-section h2 { margin: 0; font-size: 17px; }
 .memory-section > p { margin: 8px 0 16px; }

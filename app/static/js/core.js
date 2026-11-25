@@ -23,6 +23,9 @@ export const STAGES = [
 export const SEV = { high: "高", medium: "中", low: "低" };
 export const META = { reject_reasons: {}, conclusions: {}, rules: [], sources: {}, user: null, key_configured: false };
 export const chatModelChoices = new Map();
+export const chatMemoryChoices = new Map();
+export const chatProjectMemoryChoices = new Map();
+export const chatMcpChoices = new Map();
 
 let cleanup = [];
 export function addCleanup(fn) { cleanup.push(fn); }
