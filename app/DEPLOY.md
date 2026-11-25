@@ -5,7 +5,7 @@
 ## 1. 准备
 - 一台 macOS / Linux 机器，装好 uv。拷贝或 `git clone` 本仓库。
 - `cp .env.example .env`，填 `LITELLM_BASE_URL`、`LITELLM_API_KEY` 和两个模型名。
-- 管理员可在“模型管理”中，从网关 `/v1/models` 返回的模型中勾选聊天可用范围并设置默认模型，保存后立即生效。首次配置前仅开放 `HIAGENT_MODEL_CHEAP` 和 `HIAGENT_MODEL_STRONG`；两者还必须存在于网关列表。`PARLEYWISE_DEFAULT_CHAT_MODEL` 可设置首次配置前的默认模型，保存后以管理员设置为准。审查初筛、复核及会话压缩仍使用原有模型配置。请只勾选支持聊天的模型。
+- 管理员可在“模型管理”中，从网关 `/v1/models` 返回的模型中勾选聊天可用范围并设置默认模型，保存后立即生效。首次配置前仅开放 `PARLEYWISE_MODEL_CHEAP` 和 `PARLEYWISE_MODEL_STRONG`；两者还必须存在于网关列表。`PARLEYWISE_DEFAULT_CHAT_MODEL` 可设置首次配置前的默认模型，保存后以管理员设置为准。审查初筛、复核及会话压缩仍使用原有模型配置。请只勾选支持聊天的模型。
   **材料内容会发给这个网关背后的模型。** 试点机构如果要求数据不出内网，就把网关换成他们自己部署的模型服务（OpenAI 兼容接口即可），这一步要在试点协议里写清楚。
 - `uv sync` 装依赖。
 
@@ -24,16 +24,16 @@ uv run python -m app.auth disable lisi                # 停用
 
 ## 3. 启动
 ```bash
-HIAGENT_HOST=0.0.0.0 ./run.sh        # 局域网可访问，默认端口 8000
+PARLEYWISE_HOST=0.0.0.0 ./run.sh        # 局域网可访问，默认端口 8000
 ```
 - 只能单进程运行，不要加 `--workers`。
-- 建议在前面放机构现有的 HTTPS 反向代理（nginx 等），并在 `.env` 里设 `HIAGENT_SECURE_COOKIE=1`。
+- 建议在前面放机构现有的 HTTPS 反向代理（nginx 等），并在 `.env` 里设 `PARLEYWISE_SECURE_COOKIE=1`。
 - 长期运行可交给 launchd / systemd，命令就是 `run.sh`。
 - 健康检查：`GET /api/health`。
 
 ## 4. 数据
-- 全部在 `HIAGENT_DATA_DIR`（默认 `app/data/hiagent.db`）。包括材料原文、AI 意见、复核决定和审计日志。
-- 备份：`sqlite3 app/data/hiagent.db ".backup 备份文件.db"`，可在服务运行时执行。
+- 全部在 `PARLEYWISE_DATA_DIR`（默认 `app/data/parleywise.db`）。包括材料原文、AI 意见、复核决定和审计日志。
+- 备份：`sqlite3 app/data/parleywise.db ".backup 备份文件.db"`，可在服务运行时执行。
 - 导出某份材料的完整记录：复核页“导出 JSON”（含审计日志）。
 
 ## 5. 试点怎么做度量

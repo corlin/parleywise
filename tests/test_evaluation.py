@@ -67,7 +67,7 @@ class EvaluationTests(unittest.TestCase):
                 argv = ['review.py', '--golden', str(golden), '--eval', '--out', str(root / mode)]
                 if mode == 'collaboration':
                     argv.append('--collaboration')
-                with patch('sys.argv', argv), patch.object(review, 'LLM', FakeLLM), patch.object(review, 'load_dotenv'), patch.object(review, 'review_doc', return_value=([], [])), patch.dict('os.environ', {'HIAGENT_TODAY': '2026-11-24', 'HIAGENT_MODEL_CHEAP': 'small', 'HIAGENT_MODEL_STRONG': 'large'}), contextlib.redirect_stdout(io.StringIO()):
+                with patch('sys.argv', argv), patch.object(review, 'LLM', FakeLLM), patch.object(review, 'load_dotenv'), patch.object(review, 'review_doc', return_value=([], [])), patch.dict('os.environ', {'PARLEYWISE_TODAY': '2026-11-24', 'PARLEYWISE_MODEL_CHEAP': 'small', 'PARLEYWISE_MODEL_STRONG': 'large'}), contextlib.redirect_stdout(io.StringIO()):
                     review.main()
                 reports.append(json.loads((root / mode / 'eval.json').read_text()))
             self.assertEqual(compare_evals.compare(*reports)['cases'], 1)

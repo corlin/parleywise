@@ -25,13 +25,13 @@ MAX_UPLOAD = 10 * 1024 * 1024
 REJECT_REASONS = {"not_violation": "不构成违规", "not_applicable": "规则不适用",
                   "bad_quote": "片段定位不准", "duplicate": "与其他意见重复", "other": "其他"}
 CONCLUSIONS = {"pass": "通过", "revise": "修改后通过", "reject": "不通过"}
-SECURE_COOKIE = os.environ.get("HIAGENT_SECURE_COOKIE") == "1"  # 走 HTTPS 时设为 1
+SECURE_COOKIE = os.environ.get("PARLEYWISE_SECURE_COOKIE") == "1"  # 走 HTTPS 时设为 1
 
 review.load_dotenv()
 RULES = review.load_rules()
 SOURCES = json.loads((ROOT / "rules.json").read_text(encoding="utf-8")).get("sources", {})
-CHEAP = os.environ.get("HIAGENT_MODEL_CHEAP") or "cheap"
-STRONG = os.environ.get("HIAGENT_MODEL_STRONG") or "strong"
+CHEAP = os.environ.get("PARLEYWISE_MODEL_CHEAP") or "cheap"
+STRONG = os.environ.get("PARLEYWISE_MODEL_STRONG") or "strong"
 
 
 def gateway_chat_models():

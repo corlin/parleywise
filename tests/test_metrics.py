@@ -4,7 +4,7 @@ import unittest
 
 # Keep the real application database untouched when importing the app.
 _data_dir = tempfile.TemporaryDirectory()
-os.environ['HIAGENT_DATA_DIR'] = _data_dir.name
+os.environ['PARLEYWISE_DATA_DIR'] = _data_dir.name
 from app import main
 from app.db import db
 

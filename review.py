@@ -12,7 +12,7 @@
 环境变量（可写在同目录 .env，已加入 .gitignore；模板见 .env.example）：
   LITELLM_BASE_URL   默认 https://llm.corlin.cn
   LITELLM_API_KEY    网关 key（只放环境变量，不要写进代码或提交到仓库）
-  HIAGENT_MODEL_CHEAP / HIAGENT_MODEL_STRONG  网关里的模型别名，默认 cheap / strong
+  PARLEYWISE_MODEL_CHEAP / PARLEYWISE_MODEL_STRONG  网关里的模型别名，默认 cheap / strong
 """
 import argparse, copy, datetime, hashlib, http.client, json, math, os, re, sys, time, urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor
@@ -154,7 +154,7 @@ def parse_findings(content):
 
 
 def today():
-    return os.environ.get("HIAGENT_TODAY") or datetime.date.today().isoformat()
+    return os.environ.get("PARLEYWISE_TODAY") or datetime.date.today().isoformat()
 
 
 def rules_block(rules):
@@ -399,14 +399,14 @@ def main():
         ap.error("--trace-collaboration 需要 --collaboration")
     load_dotenv()
     # 同一次评测即使跨午夜也使用同一天，便于重现。
-    os.environ.setdefault('HIAGENT_TODAY', datetime.date.today().isoformat())
+    os.environ.setdefault('PARLEYWISE_TODAY', datetime.date.today().isoformat())
 
     rules = load_rules()
     llm = None if a.offline else LLM()
     if llm is not None and not llm.key:
         sys.exit("未设置 LITELLM_API_KEY；如只想跑关键词基线，请加 --offline")
-    cheap = os.environ.get("HIAGENT_MODEL_CHEAP", "cheap")
-    strong = os.environ.get("HIAGENT_MODEL_STRONG", "strong")
+    cheap = os.environ.get("PARLEYWISE_MODEL_CHEAP", "cheap")
+    strong = os.environ.get("PARLEYWISE_MODEL_STRONG", "strong")
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
 
     if a.text_file:

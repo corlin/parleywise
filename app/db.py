@@ -1,4 +1,4 @@
-"""SQLite 存储：一个文件，所有表在这里建。路径可用 HIAGENT_DATA_DIR 改。"""
+"""SQLite 存储：一个文件，所有表在这里建。路径可用 PARLEYWISE_DATA_DIR 改。"""
 import json, os, sqlite3, sys, time
 from contextlib import contextmanager
 from pathlib import Path
@@ -6,9 +6,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from review import load_dotenv  # noqa: E402
 
-load_dotenv()  # 先读 .env，HIAGENT_DATA_DIR 才能生效（命令行管理账号时也一样）
-DATA_DIR = Path(os.environ.get("HIAGENT_DATA_DIR", Path(__file__).resolve().parent / "data"))
-DB_PATH = DATA_DIR / "hiagent.db"
+load_dotenv()  # 先读 .env，PARLEYWISE_DATA_DIR 才能生效（命令行管理账号时也一样）
+DATA_DIR = Path(os.environ.get("PARLEYWISE_DATA_DIR", Path(__file__).resolve().parent / "data"))
+DB_PATH = DATA_DIR / "parleywise.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (

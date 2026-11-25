@@ -1,6 +1,6 @@
 # Parleywise：基金营销材料合规初审
 
-产品名 Parleywise（域名 parleywise.com）。本目录最早叫 MVP0，代码里的环境变量前缀 `HIAGENT_`、数据库文件名 `hiagent.db` 暂时沿用。
+产品名 Parleywise（域名 parleywise.com）。本目录最早叫 MVP0，环境变量前缀统一为 `PARLEYWISE_*`，默认数据库为 `parleywise.db`。
 
 目标：验证「AI 初审能否在不增加漏审的前提下，把每份材料的审查时间缩短一半」。
 
@@ -40,7 +40,7 @@ uv run compare_evals.py out/baseline/eval.json out/collaboration/eval.json
 
 可额外传入 `--trace-collaboration`，在每篇结果 JSON 的 `collaboration_trace` 中保存各角色原始意见，以便检查交接。意见可能含材料原文，默认关闭；仅在获授权时保存，并保护输出文件。
 
-两次使用相同模型配置、规则、样例与 `HIAGENT_TODAY` 固定日期。评测结果记录输入、规则、脚本指纹与日期和模型别名；对照工具会拒绝指纹不一致、缺少清单或存在失败样例的结果。网关内别名指向的实际模型可能变化，仍需另行核对。失败样例不计入质量指标，任务退出码为非零；分母为零的指标为 null，不能视作 100%。网关未返回完整费用时 `cost_per_doc_usd` 为 null。历史评测没有新清单，需要重新评测才能使用自动对照。黄金集为短合成样例，结果不能证明真实业务效果，亦不能取代合规专家审查。涉及真实材料前先确认数据处理授权。
+两次使用相同模型配置、规则、样例与 `PARLEYWISE_TODAY` 固定日期。评测结果记录输入、规则、脚本指纹与日期和模型别名；对照工具会拒绝指纹不一致、缺少清单或存在失败样例的结果。网关内别名指向的实际模型可能变化，仍需另行核对。失败样例不计入质量指标，任务退出码为非零；分母为零的指标为 null，不能视作 100%。网关未返回完整费用时 `cost_per_doc_usd` 为 null。历史评测没有新清单，需要重新评测才能使用自动对照。黄金集为短合成样例，结果不能证明真实业务效果，亦不能取代合规专家审查。涉及真实材料前先确认数据处理授权。
 
 ## 当前结果（2026-11-23）
 - 离线关键词基线：召回率 33%（11/33），准确率 100%，没有误报。漏掉的主要是需要理解上下文的规则：业绩展示期间、比较基准、缺少声明、基金经理业绩、评级、股东背景等。
@@ -61,7 +61,7 @@ uv run compare_evals.py out/baseline/eval.json out/collaboration/eval.json
 uv run python -m app.auth add <用户名> <姓名> --admin   # 第一次先建账号
 ./run.sh                                               # 打开 http://127.0.0.1:8000
 ```
-数据存在 `app/data/hiagent.db`（已 gitignore）。上传支持 .txt/.md/.docx/.pdf（不含扫描件 OCR）。试点部署见 `app/DEPLOY.md`。
+数据存在 `app/data/parleywise.db`（已 gitignore）。上传支持 .txt/.md/.docx/.pdf（不含扫描件 OCR）。试点部署见 `app/DEPLOY.md`。
 
 ## 平台功能初版
 
